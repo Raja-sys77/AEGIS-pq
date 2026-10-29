@@ -7,7 +7,7 @@ This document provides a forensic cryptographic review of the **AEGIS-PQ** codeb
 Post-quantum cryptography (PQC) represents a fundamental mathematical transition from group-theoretic hardness assumptions (discrete logarithms, integer factorization) to high-dimensional Euclidean lattice problems (Learning With Errors, Ring-LWE, Module-LWE). In this domain, subtle implementation shortcuts, improper key derivation routines, or unverified hardware offload claims completely undermine security guarantees.
 
 This audit establishes three primary determinations:
-1. **Hardware Arithmetic Boundary:** The existing FPGA accelerator (`kyber_accelerator_top_0` in `kyber_accelerator.cpp`) is an **isolated polynomial arithmetic pipeline** ($\text{NTT} \to \text{PWM} \to \text{iNTT}$) computing $(x \cdot 3) \pmod{3329}$ with a hardcoded constant secret ($FIXED\_SECRET = 3$). It is **not** a complete implementation of NIST FIPS 203 ML-KEM.
+1. **Hardware Arithmetic Boundary:** The existing FPGA accelerator (`kyber_accelerator_top_0` in `kyber_accelerator.cpp`) is an **isolated polynomial arithmetic pipeline** ($\text{NTT} \to \text{PWM} \to \text{iNTT}$) designed with a hardcoded constant secret ($FIXED\_SECRET = 3$). Crucially, while the hardware implementation output (`HW`) matches its software model twin (`SW`) 100% byte-for-byte, neither computes the true ring identity $(3 \cdot x) \pmod{3329}$ due to shared twiddle-factor indexing (`k=0` vs `k=1`) and scaling discrepancies in the HLS source. It is **not** a complete implementation of NIST FIPS 203 ML-KEM, nor can it serve as a standalone compliant NTT engine without RTL resynthesis.
 2. **Rejection of Flawed Shortcuts:** The keystream derivation mechanisms identified in historical demo scripts (e.g., repeating polynomial output modulo 256 as an XOR mask, or hashing raw NTT outputs) are cryptographically broken, provide zero IND-CPA/IND-CCA2 security, and must be strictly replaced.
 3. **Sound Post-Quantum Architecture:** A cryptographically sound, standards-compliant pipeline is established: true ML-KEM encapsulation/decapsulation $\to$ 256-bit shared secret $K$ $\to$ HKDF-SHA256 (RFC 5869) session key expansion $\to$ Authenticated Encryption with Associated Data (AES-256-GCM / ChaCha20-Poly1305).
 4. **Legitimate Red-Team Boundaries:** The classical baseline comparison is strictly bounded: claims of breaking production RSA-2048 in seconds are rejected as mathematically impossible on current hardware. A rigorous combination of **Toy RSA Factoring (RSA-32 to RSA-512)**, **Shor's Algorithm Period-Finding Simulation**, and **Active AEAD Tamper Injection** is specified.
@@ -88,20 +88,26 @@ void run_pwm_wrapper(internal_stream &in_stream, internal_stream &out_stream) {
 ```
 
 ### 3.2 Key Findings from the Forensic Code Audit
-1. **Isolated Pipeline:** The accelerator computes:
-   $$y = \text{iNTT}\left(\text{NTT}(x) \circ \text{NTT}(s)\right) \equiv (x \cdot 3) \pmod{3329}$$
-   Because $s = 3$ is a scalar constant, its polynomial representation is simply the constant polynomial 3. In the NTT domain, multiplying by 3 scales every coefficient by 3. The inverse NTT returns $3 \cdot x \pmod{3329}$.
+1. **Isolated Pipeline & Mathematical Identity Discrepancy:**
+   - **Theoretical Intention:** The accelerator was architecturally intended to compute:
+     $$y = \text{iNTT}\left(\text{NTT}(x) \circ \text{NTT}(s)\right) \equiv (x \cdot 3) \pmod{3329}$$
+     Because $s = 3$ is a scalar constant, its NTT representation should theoretically scale every coefficient by 3, returning $3 \cdot x \pmod{3329}$ upon inverse transformation.
+   - **Empirical Ground Truth:** Adversarial verification demonstrates that the hardware output does **NOT** equal $(3 \cdot x) \pmod{3329}$. When evaluated against test vector $P[i] = (7i + 3) \pmod{3329}$, **256 / 256 coefficients (100.0%) fail the ring identity**. For instance, index 0 yields `2425` instead of `9`, index 1 yields `2535` instead of `30`, and index 2 yields `1344` instead of `51`.
+   - **Root Cause in Shared Model Artifacts:** Both the HLS C++ RTL (`kyber_accelerator.cpp`) and the Python test twin (`Final_KYBER.ipynb` / `run_software_chain`) share identical algorithmic discrepancies:
+     - *Twiddle Shift:* The forward Cooley-Tukey butterfly initializes twiddle index `k = 0` (line 84) instead of `k = 1`, offsetting roots of unity by one position across all 7 levels.
+     - *Gentleman-Sande Inversion:* The inverse butterfly multiplies by forward `zetas[k]` instead of the Montgomery modular inverse $\zeta^{-1} \cdot R^2 \pmod Q$.
+     - *Montgomery Scaling Mismatch:* Inverse scaling applies constant $3316 \equiv 256^{-1} \pmod Q$ inside `montgomery_reduce`, effectively multiplying by $3316 \cdot R^{-1} \equiv 1132 \pmod Q$ and accumulating a net factor of $1749 \pmod Q$ instead of unity ($1441$).
 2. **Missing Cryptographic Layers:** The hardware core lacks:
    - Pseudo-Random Functions (PRF): No Keccak-f[1600], SHAKE128, or SHAKE256 cores.
    - Noise Samplers: No Centered Binomial Distribution ($\text{CBD}_\eta$) hardware logic.
    - Public-Key Generation: No matrix $\mathbf{A} \in R_q^{k \times k}$ generation or modular vector arithmetic ($\mathbf{t} = \mathbf{A}\mathbf{s} + \mathbf{e}$).
    - Fujisaki-Okamoto Transform: No re-encryption verification or implicit rejection logic.
    - Key Encapsulation / Decapsulation: Cannot accept an encapsulation key $ek$ or emit a ciphertext $c$.
-3. **Explanation of KAT Verification Failure:**
+3. **Explanation of KAT and Test Verification Failure:**
    - In `kat.ipynb` (Cells 2–3), attempts were made to pass NIST Known Answer Test (KAT) vectors (`input_buffer` = 64 bytes, `pk_buffer` = 800 bytes).
    - This caused the AXI DMA engine to immediately hang (`dma_int_err` / timeout) because the hardware IP strictly requires an AXI-Stream packet of exactly **256 words (1024 bytes)** with `TLAST` asserted on word 255.
-   - In Cell 5 of `kat.ipynb`, the test was rewritten to allocate 256 words of uint32 and check `expected_val = (test_poly[i] * 3) % Q`. This test passed with 0 errors.
-   - **Conclusion:** The claim that `kat_MLKEM_512.rsp` passed on the hardware accelerator is unsupported. Only the arithmetic polynomial test passed.
+   - In Cell 5 of `kat.ipynb` and `Final_KYBER.ipynb`, the test evaluated hardware output (`HW`) against `run_software_chain` / `generate_golden_model` (`SW`). Both implementations emitted identical outputs (`[2425, 2535, 1344, 303, 2232, ...]`), yielding `SUCCESS: Hardware matches Software Model exactly!`.
+   - **Conclusion:** Cell 5 verified that the FPGA RTL matched the software reference model twin, **not** that it computed true mathematical polynomial multiplication $(3 \cdot P) \pmod Q$. Full FIPS 203 ML-KEM-512 arithmetic must therefore execute via pure software reference, with the FPGA hardware serving as an empirical arithmetic benchmark and streaming telemetry co-processor.
 
 ---
 
@@ -126,7 +132,7 @@ def xor_bytes(data, keystream):
 ```
 
 #### Why This is Fatal Cryptographically:
-1. **Linear Transformation of Plaintext:** The input vector is formed directly from plaintext image bytes ($v_i = p_i \pmod q$). The accelerator then computes $c_i = (3 \cdot p_i) \pmod{3329}$. The keystream is formed by $k_i = c_i \pmod{256}$. This means the keystream is a direct, deterministic algebraic function of the plaintext itself, violating every principle of stream cipher design.
+1. **Linear Transformation of Plaintext:** The input vector is formed directly from plaintext image bytes ($v_i = p_i \pmod q$). The accelerator then computes an internal deterministic transform $c_i = \text{HW}(p)_i$ (theoretically modeled as $3 \cdot p_i \pmod{3329}$, exhibiting HLS twiddle-indexing artifacts). The keystream is formed by $k_i = c_i \pmod{256}$. This means the keystream is a direct, deterministic algebraic function of the plaintext itself, violating every principle of stream cipher design.
 2. **Known Secret Key:** Because the secret is hardcoded to $3$, any eavesdropper observing the output can invert it:
    $$p_i \equiv c_i \cdot 3^{-1} \equiv c_i \cdot 2220 \pmod{3329}$$
    The "encryption" can be decrypted in micro-operations without any quantum computer or key recovery.

@@ -62,7 +62,7 @@ The AEGIS-PQ prototype is deployed on the **Tul PYNQ-Z2** development board (Xil
 | **Host Interface** | AXI-Lite (Control Register @ `0x00`), AXI-Stream via AXI DMA (`axi_dma_0`) |
 | **Accelerator IP** | `kyber_accelerator_top_0` |
 | **Bitstream Artifacts** | `PQC Kyber/bitstream/design_1.bit` (3.9 MB), `design_1.hwh` (307 KB) |
-| **Clock Domain** | 100 MHz PL clock |
+| **Clock Domain** | 50.0 MHz PL clock (`PCW_FPGA0_PERIPHERAL_FREQMHZ = 50`) |
 
 ### 3.2 Polynomial Arithmetic Boundary
 The custom RTL accelerator accelerates polynomial operations in the quotient ring:

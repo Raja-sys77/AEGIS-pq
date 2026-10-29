@@ -93,7 +93,7 @@ graph LR
   - Framing into AEGIS-PQ protocol frames and outbound dispatch.
 - **Programmable Logic (PL) Responsibilities:**
   - Dedicated hardware execution of NTT, Pointwise Polynomial Multiplication (PWM), and iNTT pipelines via `kyber_accelerator_top_0`.
-  - Clock frequency: 100 MHz.
+  - Clock frequency: 50.0 MHz.
   - AXI DMA channel transfer: 1024 bytes (256 × 32-bit words) per polynomial transform.
 - **Coexistence Constraints:**
   - Memory footprint: Must run within available RAM (330 MB free) without memory leaks.

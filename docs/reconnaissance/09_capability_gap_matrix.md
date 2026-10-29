@@ -60,8 +60,8 @@ Each capability is rigorously classified into one of the following states based 
 ### 3.1 Domain 1: FPGA Programmable Logic & Arithmetic Acceleration (C01–C06)
 
 #### Analysis of C01, C03, C05, C06:
-The Vivado HLS hardware pipeline in `PQC Kyber/src/kyber_accelerator.cpp` synthesizes an authentic 100 MHz Artix-7 accelerator. Forward NTT (C01) and inverse NTT (C03) correctly execute 7-stage butterfly networks using Montgomery reduction (C05) and Barrett reduction (C06).
-- **Physical Verification:** `Final_KYBER.ipynb` Cell 0 executed 1000 DMA transfers, recording an execution time of **1.09 ms per transfer**, verifying that the arithmetic core operates flawlessly on live silicon.
+The Vivado HLS hardware pipeline in `PQC Kyber/src/kyber_accelerator.cpp` synthesizes an authentic 50.0 MHz Artix-7 accelerator (`PCW_FPGA0_PERIPHERAL_FREQMHZ = 50`). Forward NTT (C01) and inverse NTT (C03) execute 7-stage butterfly networks using Montgomery reduction (C05) and Barrett reduction (C06).
+- **Physical Verification:** `Final_KYBER.ipynb` Cell 0 executed 1000 DMA transfers, recording an execution time of **1.09 ms per transfer**, verifying that the arithmetic core operates on live silicon.
 - **Arithmetic Acceleration Reality:** The reported **27.0x speedup** is derived by comparing this 1.19 ms hardware DMA execution against an interpreted pure-Python reference implementation ($32.26\text{ ms}$). This is a genuine arithmetic acceleration metric for polynomial transforms in $R_q$, but must not be conflated with an end-to-end network handshake acceleration factor.
 
 #### Analysis of C02 (Pointwise Multiplication & Secret Key Limitation):
@@ -70,9 +70,9 @@ The Vivado HLS hardware pipeline in `PQC Kyber/src/kyber_accelerator.cpp` synthe
   static const int16_t FIXED_SECRET = 3; 
   int16_t res = montgomery_reduce((int32_t)val * (FIXED_SECRET * 2285));
   ```
-- **Architectural Impact:** The accelerator does not load a variable secret key vector $\mathbf{s}$; it multiplies every incoming NTT coefficient by the hardcoded scalar `3`.
+- **Architectural Impact:** The accelerator does not load a variable secret key vector $\mathbf{s}$; it multiplies every incoming NTT coefficient by the hardcoded scalar `3`. Furthermore, empirical testing confirms the output matches the C++ software twin but fails the mathematical ring identity $(3 \cdot P) \pmod Q$ due to HLS twiddle-indexing and scaling discrepancies.
 - **Classification:** **PARTIAL**.
-- **Remediation Strategy:** The hardware core is retained as an accelerated polynomial engine. Higher-level ML-KEM matrix-vector operations ($\mathbf{A}\mathbf{s} + \mathbf{e}$) are orchestrated in the host software engine, offloading forward/inverse NTT transforms to the PL fabric.
+- **Remediation Strategy:** Standard-compliant ML-KEM-512 (FIPS 203) polynomial arithmetic and key agreement execute in pure software reference on the host/processing system, while the FPGA hardware core is retained and utilized as an empirical streaming arithmetic benchmark and proof-of-concept pipeline.
 
 #### Analysis of C04 (AXI DMA Pipeline & Hanging Risks):
 - **Observation:** `axi_dma_0` operates in Direct Register Mode (`C_INCLUDE_SG=0`) without scatter-gather capability.

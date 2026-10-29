@@ -49,16 +49,16 @@ graph TD
 #### 1. What is genuinely working:
 - **Physical Hardware Silicon:** The Tul PYNQ-Z2 board is **live, reachable, and operating** at `192.168.0.2` on the `192.168.0.0/24` local network (ICMP ping latency $< 1\text{ ms}$, SSH Port 22 open, Jupyter Port 9090 open).
 - **FPGA Bitstream Integrity:** The physical bitstream resident on the board (`/home/xilinx/jupyter_notebooks/pqc_kyber512/design_1.bit`, 4,045,692 bytes) is a **100% byte-for-byte match** with the repository bitstream (`PQC Kyber/bitstream/design_1.bit`), matching SHA-256 hash `bb712fc45ab6e328258a4304c6e2718b5c1711bdd9436ad9a24dc1307fbfa98a`.
-- **Verified Arithmetic Accelerator:** The hardware IP `kyber_accelerator_top_0` (synthesized at base address `0x40000000` with AXI DMA `axi_dma_0` at `0x41E00000`) is an authentic 100 MHz Artix-7 pipeline implementing 7-stage Cooley-Tukey NTT, Montgomery reduction ($QINV = -3327, R = 2285$), Pointwise Multiplication, and Gentleman-Sande iNTT for polynomials of degree $n=256$ modulo $q=3329$.
-- **Verified 27.0x Arithmetic Speedup:** Physical execution logs and live tests confirm that processing a 256-word polynomial vector takes **1.09 to 1.19 ms on the FPGA PL**, compared to **32.26 to 33.11 ms on the ARM Cortex-A9 CPU** running interpreted pure Python. This demonstrates a verified **27.0x arithmetic acceleration factor**.
+- **Verified Arithmetic Accelerator:** The hardware IP `kyber_accelerator_top_0` (synthesized at base address `0x40000000` with AXI DMA `axi_dma_0` at `0x41E00000`) is an authentic 50.0 MHz Artix-7 pipeline (`PCW_FPGA0_PERIPHERAL_FREQMHZ = 50` in `design_1.hwh`) implementing 7-stage Cooley-Tukey NTT, Montgomery reduction ($QINV = -3327, R = 2285$), Pointwise Multiplication, and Gentleman-Sande iNTT for polynomials of degree $n=256$ modulo $q=3329$.
+- **Verified 27.0x Arithmetic Speedup:** Physical execution logs and live tests confirm that processing a 256-word polynomial vector takes **1.09 to 1.19 ms on the FPGA PL** (@ 50 MHz), compared to **32.26 to 33.11 ms on the ARM Cortex-A9 CPU** (@ 667 MHz) running interpreted pure Python. This demonstrates a verified **27.0x arithmetic acceleration factor** for isolated polynomial streaming (dominated by DMA driver overhead), though it does not represent an end-to-end ML-KEM-512 handshake.
 - **Native Cryptographic Libraries on Board:** Python 3.8.2 on the board has `cryptography 2.8` pre-installed, providing native C-accelerated `AESGCM` and `HKDF` without requiring any package installations.
 
 #### 2. What was simulated, hardcoded, or conceptually incomplete:
-- **Fixed Secret Key ($s=3$):** In `PQC Kyber/src/kyber_accelerator.cpp` (line 114), the pointwise multiplier hardcodes:
+- **Fixed Secret Key ($s=3$) & Arithmetic Ring Identity Failure:** In `PQC Kyber/src/kyber_accelerator.cpp` (line 114), the pointwise multiplier hardcodes:
   ```cpp
   static const int16_t FIXED_SECRET = 3;
   ```
-  The FPGA core does not load a variable secret key vector; it multiplies every incoming NTT coefficient by the scalar constant 3. Output values strictly satisfy $y_i = (3 \cdot x_i) \pmod{3329}$.
+  The FPGA core does not accept a variable secret key vector. Crucially, empirical adversarial testing reveals that while the hardware output (`HW`) matches the software model twin (`SW`) 100% byte-for-byte (`[2425, 2535, 1344, 303, 2232, ...]`), neither output matches the ring identity $(3 \cdot P) \pmod{3329}$ (`[9, 30, 51, 72, 93, ...]`, failing on 256/256 coefficients) due to twiddle factor index shifts (`k=0` vs `k=1`), un-inverted GS butterfly factors, and Montgomery scale discrepancies ($3316$ vs $1441$) present in both the HLS C++ source and Python test scripts.
 - **Flawed Keystream Shortcut in Historical Dashboard:** In `kyber_hal.py` (lines 274–281) and `app.py`, image encryption was performed by taking polynomial output coefficients modulo 256 and repeating them as an XOR mask over image tiles. This is an unauthenticated, easily broken repeating XOR cipher that provides zero cryptographic security.
 - **NIST KAT Execution Discrepancy:** NIST FIPS 203 KAT vectors from `kat_MLKEM_512.rsp` were never executed against the FPGA IP; in `kat.ipynb`, attempting to feed 64-byte and 800-byte buffers caused the AXI DMA engine to hang indefinitely because the hardware expects exactly 1024 bytes (256 uint32 words).
 - **PolarFire SoC Disconnect:** The documentation file `Aegis-PQC_Master_Proposal_v2(1).md` described a Microchip PolarFire SoC (`MPFS095T`) with an E51 monitor and TeraFire crypto coprocessor. This was an architectural contest submission for an October 24, 2026 deadline; no PolarFire hardware exists in this workspace. The physical platform is exclusively the Tul PYNQ-Z2 (Zynq-7020).
@@ -187,7 +187,7 @@ The implementation sequence follows the six gated milestones defined in `docs/re
 
 | Document Path | Title & Core Subject | Key Findings & Evidence Cited |
 |:---|:---|:---|
-| `docs/reconnaissance/01_workspace_inventory.md` | Workspace Inventory & Baseline Review | Inventory of 77 files, hash audit of bitstreams, preservation rules. |
+| `docs/reconnaissance/01_workspace_inventory.md` | Workspace Inventory & Baseline Review | Inventory of 31 primary baseline files (77 total workspace files pre-filtering), hash audit of bitstreams, preservation rules. |
 | `docs/reconnaissance/02_project_evolution.md` | Project Evolution & Timeline | Chronology: Stage A (Kyber PL), Stage B (PolarFire paper), Stage C (3-Node). |
 | `docs/reconnaissance/03_fpga_hardware_audit.md` | FPGA Hardware & Accelerator Audit | Register map: `0x40000000`, DMA: `0x41E00000`, 27.0x speedup grounding. |
 | `docs/reconnaissance/04_existing_dashboard_audit.md`| Dashboard Audit & Preservation | Port 5000 `app.py`, 64-tile image demo, non-destructive coexistence rules. |

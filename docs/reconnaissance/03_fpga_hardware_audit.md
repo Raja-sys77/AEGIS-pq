@@ -184,13 +184,45 @@ OUTPUT_DMA <-- [Stage 5: Store] <-- pipe_4 <-- [Stage 4: iNTT] <-- pipe_3 <-- [S
 5. **Stage 5 (`store_data_wrapper`)**:
    - Reads from `pipe_4`, applies final non-negative reduction (`if (val < 0) val += Q`), formats 32-bit AXI packet with `p.last = (i == 255)`, and pushes to `OUTPUT_DMA`.
 
-### 5.3 Mathematical Equivalent Operation
+### 5.3 Mathematical Operation & Empirical Arithmetic Grounding
 
-Because the forward NTT and inverse NTT are exact linear mathematical inverses, and because multiplication by a scalar in the NTT domain is equivalent to scalar multiplication in the standard polynomial domain:
+#### Theoretical Intention vs. Empirical Ground Truth
+The microarchitectural intention of the pipeline was to compute an end-to-end polynomial identity check:
+$$\text{Intended}(x) = \text{iNTT}(\text{NTT}(P(x)) \times 3) \equiv (3 \cdot P(x)) \pmod{3329}$$
 
-$$\text{Output}(x) = \text{iNTT}(\text{NTT}(P(x)) \times 3) \equiv (3 \cdot P(x)) \pmod{3329}$$
+However, **empirical adversarial verification reveals that the hardware output does NOT compute $(3 \cdot P(x)) \pmod{3329}$**. When evaluated against the standard test vector $P[i] = (7i + 3) \pmod{3329}$, **256 out of 256 coefficients (100.0%) fail the claimed ring identity**:
 
-The hardware IP is therefore an end-to-end testbench pipeline verifying that the NTT and iNTT logic correctly round-trip without corruption.
+| Index $i$ | Input $P[i]$ | Expected Ring Identity $(3 \cdot P[i]) \pmod{3329}$ | Actual HW Output (`kyber_accelerator_top`) | Actual SW Model Output (`run_software_chain`) | Match? |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 0 | 3 | 9 | 2425 | 2425 | HW == SW (Corrupted vs Identity) |
+| 1 | 10 | 30 | 2535 | 2535 | HW == SW (Corrupted vs Identity) |
+| 2 | 17 | 51 | 1344 | 1344 | HW == SW (Corrupted vs Identity) |
+| 3 | 24 | 72 | 303 | 303 | HW == SW (Corrupted vs Identity) |
+| 4 | 31 | 93 | 2232 | 2232 | HW == SW (Corrupted vs Identity) |
+| ... | ... | ... | ... | ... | ... |
+| **All 256** | — | — | **256 / 256 Mismatch** | **256 / 256 Mismatch** | **100% Identity Failure** |
+
+#### Root Cause Analysis of the Discrepancy
+Forensic inspection of `kyber_accelerator.cpp` and `Final_KYBER.ipynb` identifies three compounding algorithmic flaws:
+1. **Twiddle-Factor Index Shift**: In standard NIST FIPS 203 / Kyber, NTT twiddle factors begin at $k = 1$ (`zetas[1] = -758`), because `zetas[0] = 2285 = R` ($17^0 \cdot R$) is the Montgomery unit. In `kyber_accelerator.cpp` (line 84), the forward loop initiates at `k = 0`, shifting every twiddle factor by one position throughout all 7 Cooley-Tukey butterfly levels.
+2. **Gentleman-Sande Inversion Error**: In the forward Cooley-Tukey butterfly, terms are scaled by $\zeta$. In the Gentleman-Sande inverse butterfly, inverting $(u - v) = 2 \cdot \zeta \cdot a_{j+len}$ requires multiplying by the modular inverse $\zeta^{-1} \cdot R^2 \pmod Q$. In `kyber_accelerator.cpp` (lines 149 and 158), the code multiplies by forward `zetas[k]`, rather than $\zeta^{-1}$. For 127 out of 128 twiddle factors, this multiplication corrupts the inverse butterfly.
+3. **Butterfly Scaling Factor Mismatch**: The Kyber NTT decomposes to degree-1 polynomials over 7 levels ($2^7 = 128$), requiring an inverse scale factor of $128^{-1} \cdot R \pmod{3329} = 1441$. In `kyber_accelerator.cpp` (line 168), the author applied $3316 \equiv 256^{-1} \pmod Q$. In Montgomery space, `montgomery_reduce(x * 3316)` multiplies by $3316 \cdot R^{-1} \equiv 1132 \pmod{3329}$. Across the 7 stages, the accumulator scales by $128 \times 1132 \equiv 1749 \pmod{3329}$, rather than unity. For an impulse polynomial $P = [1, 0, \dots]$, the output coefficient is $3 \times 1749 \equiv 1918 \pmod{3329}$ instead of 3.
+
+#### What the Hardware Testbench Actually Verified
+In `PQC Kyber/src/Final PL Output` and `Final_KYBER.ipynb`, the testbench prints:
+```text
+Idx | HW   | SW   | Status
+0   | 2425 | 2425 | OK
+1   | 2535 | 2535 | OK
+2   | 1344 | 1344 | OK
+3   | 303  | 303  | OK
+4   | 2232 | 2232 | OK
+SUCCESS: Hardware matches Software Model exactly!
+```
+The hardware testbench verified that the synthesized RTL matched the Python golden software model `run_software_chain` / `generate_golden_model` 100% byte-for-byte. Because the Python software model was directly translated from the C++ IP, both implementations shared the identical indexing and scaling bugs. The author concluded verification passed without checking against true mathematical polynomial multiplication.
+
+#### Architectural Mandate
+This cements why the hardware accelerator **CANNOT be used as a standalone mathematically compliant NTT engine** without RTL revision and resynthesis. Under the project's strict non-destructive constraints (no FPGA reflashing), standard-compliant ML-KEM-512 (FIPS 203) key encapsulation and decapsulation must execute in pure software reference, while the FPGA hardware is utilized as an empirical streaming arithmetic benchmark and proof-of-concept pipeline.
 
 ---
 
@@ -278,4 +310,4 @@ The workspace documentation and pitch materials emphasize a **"27.0x Faster on F
 
 1. **Hardware Integrity**: The bitstream and HLS IP represent a stable, working polynomial pipeline verified on live silicon. It successfully validates that the PYNQ-Z2 fabric can stream polynomials across AXI DMA without bus errors.
 2. **Preservation**: The bitstream `design_1.bit` must remain intact as the validated baseline hardware.
-3. **Integration Strategy**: For the multi-device demo (AEGIS-PQ), the full ML-KEM state machine (matrix generation, noise sampling, FO-transform, session key derivation) must execute in optimized Python/C on the ARM PS or host gateway, delegating polynomial NTT/iNTT transformations to the FPGA accelerator where applicable.
+3. **Integration Strategy**: For the multi-device demo (AEGIS-PQ), mathematically compliant ML-KEM-512 FIPS 203 key encapsulation, decapsulation, and Fujisaki-Okamoto verification execute in pure software reference on the host/processing system. The FPGA accelerator is preserved and invoked as an empirical streaming arithmetic benchmark, live telemetry offload, and architectural proof-of-concept pipeline.

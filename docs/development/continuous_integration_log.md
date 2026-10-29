@@ -58,3 +58,21 @@ This document records the chronological development milestones, git commits, ver
 - **Commit Hash:** `8dc699a` (`docs(recon): master reconnaissance synthesis, project blueprint, and CY FOCUS architecture`)
 - **Push Result:** SUCCESS (pushed to `origin/main` on `https://github.com/Raja-sys77/AEGIS-pq`)
 - **Status:** COMPLETED & VERIFIED ON REMOTE
+
+### Milestone 0C: Forensic Remediation — Arithmetic Grounding & Hardware Clock Alignment
+- **Date/Time:** 2026-10-30T01:35:00+05:30
+- **Action:**
+  - Integrated adversarial empirical findings from Challenger 1 and Reviewer 1 across reconnaissance reports and architecture specifications:
+    1. **Empirical Arithmetic Grounding (`03_fpga_hardware_audit.md`, `06_cryptographic_design_review.md`, `00_master_reconnaissance_report.md`)**:
+       - Conclusively refuted the mathematical claim that the FPGA accelerator computes the ring identity $(3 \cdot P) \pmod{3329}$.
+       - Documented that while the FPGA hardware output (`HW`) matches the software golden model (`SW`) 100% byte-for-byte (`[2425, 2535, 1344, 303, 2232, ...]`), **256 out of 256 coefficients (100%) fail $(3 \cdot P) \pmod{3329}$**.
+       - Isolated root causes in shared HLS and Python implementation artifacts: forward NTT twiddle shift (`k=0` vs `k=1`), Gentleman-Sande inverse butterfly factor inversion bug, and Montgomery scaling discrepancy ($3316 \cdot R^{-1} \equiv 1132 \pmod Q$, accumulating a scale of $1749 \pmod Q$ rather than unity $1441$).
+       - Confirmed that Cell 5 in `kat.ipynb` / `Final_KYBER.ipynb` passed against the software twin rather than true mathematical identity.
+       - Formally mandated that mathematically compliant ML-KEM-512 FIPS 203 encapsulation/decapsulation executes in pure software reference, while the FPGA IP serves as an empirical streaming arithmetic benchmark and live proof-of-concept pipeline.
+    2. **PL Clock Frequency Alignment**:
+       - Reconciled all hardware clock citations across `PROJECT.md`, `00_master_reconnaissance_report.md`, `01_workspace_inventory.md`, `05_three_node_architecture_audit.md`, `07_system_boundaries_and_dependencies.md`, `09_capability_gap_matrix.md`, and `README.md` to the verified **50.0 MHz** frequency (`PCW_FPGA0_PERIPHERAL_FREQMHZ = 50` in `design_1.hwh`).
+    3. **File Count Precision**:
+       - Clarified the distinction in `00_master_reconnaissance_report.md` between the 31 primary baseline repository files and total workspace files pre-filtering.
+- **Commit Hash:** `03a5c1c` (`docs(remediation): ground arithmetic findings and align PL clock frequency to 50.0 MHz`)
+- **Push Result:** SUCCESS
+- **Status:** COMPLETED & VERIFIED

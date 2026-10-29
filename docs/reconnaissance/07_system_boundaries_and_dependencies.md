@@ -28,7 +28,7 @@ graph TD
         
         subgraph PL_Domain ["Programmable Logic (Artix-7 Fabric)"]
             PL_DMA["AXI DMA (axi_dma_0)"]
-            PL_IP["kyber_accelerator_top_0 (100 MHz)"]
+            PL_IP["kyber_accelerator_top_0 (50.0 MHz)"]
             PL_BRAM["BRAM Ring Buffers"]
         end
 

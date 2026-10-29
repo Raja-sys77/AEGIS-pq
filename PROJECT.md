@@ -46,7 +46,7 @@ graph TB
             N2_Watchdog["AXI DMA Watchdog (3.0s Timeout Protection)"]
             N2_MemQueue["In-Memory Telemetry Ring Buffer (Zero Flash Writes)"]
         end
-        subgraph PL_Fabric ["Programmable Logic (Artix-7 FPGA @ 100MHz)"]
+        subgraph PL_Fabric ["Programmable Logic (Artix-7 FPGA @ 50.0MHz)"]
             PL_DMA["AXI DMA (axi_dma_0 @ 0x41E00000)"]
             PL_NTT["kyber_accelerator_top_0 (@ 0x40000000)<br/>Forward Cooley-Tukey NTT (256 mod 3329)<br/>Pointwise Multiplier (FIXED_SECRET = 3)<br/>Inverse Gentleman-Sande iNTT"]
         end
@@ -120,12 +120,12 @@ graph TB
 | **SoC Device** | Xilinx Zynq-7000 XC7Z020-1CLG400C | Tul PYNQ-Z2 Board (`192.168.0.2`), Kernel `5.4.0-xilinx-v2020.2` |
 | **Processing System (PS)** | Dual-core ARM Cortex-A9 MPCore @ 666.67 MHz | 512 MB DDR3 Memory (330 MB available), Ubuntu 20.04 LTS |
 | **Programmable Logic (PL)** | Artix-7 Equivalent FPGA Fabric | 85,000 Logic Cells, 220 DSP48E1 slices, 4.9 Mb Block RAM |
-| **Fabric Clock (`FCLK0`)** | 100.00 MHz (10.0 ns period) | Driven by PS PLL, confirmed in `design_1.hwh` |
+| **Fabric Clock (`FCLK0`)** | 50.00 MHz (20.0 ns period) | Driven by PS PLL, confirmed in `design_1.hwh` (`PCW_FPGA0_PERIPHERAL_FREQMHZ = 50`) |
 | **Hardware Core IP** | `kyber_accelerator_top_0` (v1.0) | Base: `0x40000000`, Range: 64 KB (`PQC Kyber/src/kyber_accelerator.cpp`) |
 | **DMA Controller** | `axi_dma_0` (v7.1 Direct Register Mode) | Base: `0x41E00000`, Range: 64 KB, Scatter-Gather Disabled (`C_INCLUDE_SG=0`) |
 | **DMA Buffer Format** | 1024 Bytes (256 × 32-bit words, unsigned) | Aligned contiguous physical memory via `pynq.allocate` |
 | **PL Arithmetic Scope** | Forward NTT $\to$ Pointwise Multiply $\to$ Inverse NTT | Modulus $q = 3329$, Degree $n = 256$, fixed twiddle factors ($\zeta=17$) |
-| **Static Secret Constant** | $FIXED\_SECRET = 3$ | Line 114 `kyber_accelerator.cpp`; computes $y \equiv 3x \pmod{3329}$ |
+| **Static Secret Constant** | $FIXED\_SECRET = 3$ | Line 114 `kyber_accelerator.cpp`; HW matches SW model twin, but fails ring identity (3*P mod Q) due to HLS twiddle-indexing and scaling artifacts |
 | **Arithmetic Acceleration** | **27.0x Speedup** over pure-Python ARM CPU | Hardware: 1.19 ms / transform; Pure-Python: 32.26 ms / transform |
 
 ### 2.2 Standard Post-Quantum Cryptographic Pipeline
@@ -137,7 +137,7 @@ Historical shortcuts—such as repeating raw polynomial coefficients mod 256 as 
    - Noise Samplers: Centered Binomial Distributions $\text{CBD}_3$ ($\eta_1=3$) for KeyGen and $\text{CBD}_2$ ($\eta_2=2$) for Encaps.
    - Public Encapsulation Key ($ek$): 800 bytes; Decapsulation Key ($dk$): 1632 bytes.
    - Ciphertext ($c$): 768 bytes; Shared Secret ($K$): 32 bytes (256 bits).
-   - Core Arithmetic Partitioning: Forward and inverse polynomial transforms in $R_q$ offloaded to FPGA PL; hashing (SHAKE128/256), sampling, and Fujisaki-Okamoto verification executed in software.
+   - Core Arithmetic Partitioning: FIPS 203 ML-KEM-512 compliant polynomial arithmetic and Fujisaki-Okamoto state transitions execute via pure software reference on the host/processing system, while the FPGA PL hardware serves as an empirical arithmetic benchmark and streaming telemetry co-processor.
 
 2. **Session Key Derivation (RFC 5869 HKDF-SHA256):**
    - Pseudorandom Key extraction: $\text{PRK} = \text{HKDF-Extract}(\text{salt}=\text{transcript\_hash}, \text{IKM}=K)$.
@@ -192,7 +192,7 @@ Inspired directly by the high-density tactical interface patterns in workspace r
 |                   | | [TILE 08] [TILE 09] [TILE 10] ... [TILE 15]   | | Current Scan: DICOM-SCAN-04   | |
 | [HARDWARE STATUS] | |  ...        ...       ...         ...     | | Tiles Received: 64 / 64       | |
 | SoC: Zynq-7020    | | [TILE 56] [TILE 57] [TILE 58] ... [TILE 63]   | | Decryption: AES-256-GCM       | |
-| PL Clock: 100MHz  | |                                               | | Integrity: 100% Valid MAC     | |
+| PL Clock: 50.0MHz | |                                               | | Integrity: 100% Valid MAC     | |
 | DMA: Direct Reg   | | [LIVE IMAGE CANVAS 512x512 PIXELS]            | | Reassembly Time: 38.2 ms      | |
 | Disk Free: 5.4MB  | +-----------------------------------------------+ +---------------------------------+ |
 | (Zero-Install OK) |                                                                                       |
@@ -224,7 +224,7 @@ The backend server on Node 3 exposes authentic, live REST and streaming endpoint
    - Reports the operational state of the hybrid engine: pure-Python reference vs. FPGA PL hardware acceleration status via `KyberHAL`.
 
 3. **`GET /api/hardware/fpga`**
-   - Telemetry from PYNQ-Z2 PL fabric: overlay loaded (`design_1.bit`), base addresses (`0x40000000` accelerator, `0x41E00000` DMA), fabric clock (100 MHz), DMA watchdog state, and PL temperature.
+   - Telemetry from PYNQ-Z2 PL fabric: overlay loaded (`design_1.bit`), base addresses (`0x40000000` accelerator, `0x41E00000` DMA), fabric clock (50.0 MHz), DMA watchdog state, and PL temperature.
 
 4. **`GET /api/network/sessions`**
    - Active APBP-v1 network sessions, sequence counter state, ingress/egress frame rates, bandwidth utilization, and link status to Node 1 (`192.168.0.3` / Mock) and Node 2 (`192.168.0.2`).
