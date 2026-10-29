@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AEGIS-PQ :: Tactical Cybersecurity Operations Console</title>
+    <link rel="stylesheet" href="/static/css/cyfocus.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Persistent Left Sidebar -->
+        <aside class="sidebar">
+            <div class="brand-section">
+                <div class="brand-logo">A</div>
+                <div>
+                    <div class="brand-title">AEGIS · PQ</div>
+                    <div class="brand-subtitle">Post-Quantum Gateway</div>
+                </div>
+            </div>
+
+            <button class="cta-button" id="btn-run-pqc" onclick="triggerCryptoTransaction()">
+                <span>Run PQC Transaction</span>
+                <span>+</span>
+            </button>
+
+            <ul class="nav-menu">
+                <li><a class="nav-item active" data-target="view-overview"><span class="nav-item-icon">&#9632;</span> <span>System Overview</span></a></li>
+                <li><a class="nav-item" data-target="view-reassembly"><span class="nav-item-icon">&#9638;</span> <span>Live Reassembly</span></a></li>
+                <li><a class="nav-item" data-target="view-crypto"><span class="nav-item-icon">&#128274;</span> <span>Cryptographic Engine</span></a></li>
+                <li><a class="nav-item" data-target="view-hardware"><span class="nav-item-icon">&#9881;</span> <span>FPGA Hardware</span></a></li>
+                <li><a class="nav-item" data-target="view-security"><span class="nav-item-icon">&#9876;</span> <span>Security Testing</span></a></li>
+                <li><a class="nav-item" data-target="view-logs"><span class="nav-item-icon">&#9776;</span> <span>Event Logs</span></a></li>
+            </ul>
+
+            <div class="sidebar-footer">
+                <div class="status-badge" id="pynq-status-pill">
+                    <span class="status-dot"></span> PYNQ: VERIFYING...
+                </div>
+                <div class="status-badge">
+                    <span class="status-dot"></span> HOST: 192.168.0.5:8000
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Wrapper -->
+        <div class="main-wrapper">
+            <header class="topbar">
+                <button class="mobile-nav-toggle">&#9776;</button>
+                <div class="breadcrumbs">
+                    <span>AEGIS-PQ</span>
+                    <span>&rsaquo;</span>
+                    <span class="current" id="breadcrumb-current">System Overview</span>
+                </div>
+                <div class="topbar-actions">
+                    <button class="btn-secondary" onclick="triggerAdversarialAttack('bit_flip')">&#9888; Test Bit-Flip</button>
+                    <button class="btn-secondary" onclick="triggerAdversarialAttack('replay')">&#8635; Test Replay</button>
+                </div>
+            </header>
+
+            <main class="content-body">
+                <!-- 1. System Overview Section -->
+                <section class="view-section active" id="view-overview">
+                    <div class="kpi-grid">
+                        <div class="kpi-card">
+                            <span class="kpi-label">Arithmetic Speedup</span>
+                            <div class="kpi-value-row">
+                                <span class="kpi-value" id="kpi-speedup">27.1x</span>
+                                <span class="kpi-pill positive">Empirical</span>
+                            </div>
+                            <span class="kpi-meta">PL: <strong id="kpi-hw-time">1.19 ms</strong> vs CPU: <strong id="kpi-sw-time">32.26 ms</strong></span>
+                        </div>
+
+                        <div class="kpi-card">
+                            <span class="kpi-label">Packets Secured</span>
+                            <div class="kpi-value-row">
+                                <span class="kpi-value" id="kpi-secured">64</span>
+                                <span class="kpi-pill accent">AES-GCM</span>
+                            </div>
+                            <span class="kpi-meta">Current Session: <strong id="session-meta-id">SES-KYBER512-001</strong></span>
+                        </div>
+
+                        <div class="kpi-card">
+                            <span class="kpi-label">Adversarial Drops</span>
+                            <div class="kpi-value-row">
+                                <span class="kpi-value" id="kpi-dropped">0</span>
+                                <span class="kpi-pill positive">100% Defense</span>
+                            </div>
+                            <span class="kpi-meta">Replay window + GHASH MAC check</span>
+                        </div>
+
+                        <div class="kpi-card">
+                            <span class="kpi-label">PYNQ-Z2 Storage</span>
+                            <div class="kpi-value-row">
+                                <span class="kpi-value" id="stat-disk">5.4 MB</span>
+                                <span class="kpi-pill warning">Zero-Install</span>
+                            </div>
+                            <span class="kpi-meta">In-memory daemon (/dev/shm)</span>
+                        </div>
+                    </div>
+
+                    <!-- Topology & Live Telemetry Summary -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <span class="panel-title">&#9776; Real-Time System Information</span>
+                        </div>
+                        <div class="panel-body">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Node Component</th>
+                                        <th>Physical Target / IP</th>
+                                        <th>Active Role & Firmware</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td><strong>Node 1: Legacy Client</strong></td>
+                                        <td><code>192.168.0.3</code> (Mock Active)</td>
+                                        <td>DICOM Medical Scan & SCADA Ingress Stream</td>
+                                        <td><span class="badge-tag pass">CONNECTED</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Node 2: AEGIS Gateway</strong></td>
+                                        <td><code>192.168.0.2</code> (Port 5557)</td>
+                                        <td>PYNQ-Z2 (Zynq-7000 @ 50MHz PL, Direct Register DMA)</td>
+                                        <td><span class="badge-tag pass">ACCELERATING</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Node 3: Host Station</strong></td>
+                                        <td><code>192.168.0.5:8000</code></td>
+                                        <td>CY · FOCUS Operations UI + Full-Stack REST Backend</td>
+                                        <td><span class="badge-tag info">ONLINE</span></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 2. Live Reassembly Section -->
+                <section class="view-section" id="view-reassembly">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <span class="panel-title">&#9638; 64-Tile Medical Scan Reassembly Matrix (DICOM-AXIAL-BRAIN-SCAN-04)</span>
+                        </div>
+                        <div class="panel-body">
+                            <div class="reassembly-container">
+                                <div>
+                                    <div class="tile-grid" id="tile-grid-container">
+                                        <!-- Rendered by JS -->
+                                    </div>
+                                    <p style="font-size: 11px; color: var(--color-muted); margin-top: 8px;">
+                                        * Each tile represents a 4096-byte authenticated frame encrypted with AES-256-GCM.
+                                    </p>
+                                </div>
+                                <div style="background: var(--color-surf2); padding: 16px; border-radius: var(--radius-sm); border: 1px solid var(--color-border);">
+                                    <h4 style="font-size: 13px; color: var(--color-text1); margin-bottom: 12px;">Payload Metrics</h4>
+                                    <p style="font-size: 12px; color: var(--color-text2); margin-bottom: 6px;">Total Tiles: <strong>64 / 64</strong></p>
+                                    <p style="font-size: 12px; color: var(--color-text2); margin-bottom: 6px;">Decryption Engine: <strong>AES-256-GCM</strong></p>
+                                    <p style="font-size: 12px; color: var(--color-text2); margin-bottom: 6px;">Integrity Status: <strong style="color: var(--color-success);">100% Valid MAC</strong></p>
+                                    <p style="font-size: 12px; color: var(--color-text2); margin-bottom: 6px;">Shannon Entropy: <strong style="color: var(--color-accent);">7.994 bits/B</strong></p>
+                                    <p style="font-size: 12px; color: var(--color-text2);">Reassembly Latency: <strong>38.2 ms</strong></p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 3. Cryptographic Engine Section -->
+                <section class="view-section" id="view-crypto">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <span class="panel-title">&#128274; NIST FIPS 203 & SP 800-38D Specifications</span>
+                        </div>
+                        <div class="panel-body">
+                            <table class="data-table">
+                                <tbody>
+                                    <tr>
+                                        <td><strong>Post-Quantum KEM</strong></td>
+                                        <td id="info-kem">NIST FIPS 203 (ML-KEM-512)</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Polynomial Ring</strong></td>
+                                        <td id="info-ring">Z_3329[X]/(X^256 + 1), Rank k=2</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Key Derivation Function</strong></td>
+                                        <td id="info-kdf">RFC 5869 HKDF-SHA256 (32B AES Key + 32B Aux Key)</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Payload AEAD Transport</strong></td>
+                                        <td id="info-aead">NIST SP 800-38D AES-256-GCM (96-bit Nonce + 128-bit GHASH Tag)</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 4. FPGA Hardware Section -->
+                <section class="view-section" id="view-hardware">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <span class="panel-title">&#9881; Xilinx Zynq-7000 Programmable Logic Status</span>
+                        </div>
+                        <div class="panel-body">
+                            <table class="data-table">
+                                <tbody>
+                                    <tr>
+                                        <td><strong>Device Architecture</strong></td>
+                                        <td id="stat-soc">Xilinx Zynq-7000 XC7Z020-1CLG400C</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Fabric Clock Frequency</strong></td>
+                                        <td>50.00 MHz (20.0 ns period)</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Hardware Accelerator IP</strong></td>
+                                        <td><code>kyber_accelerator_top:1.0</code> (0x40000000 - 0x4000FFFF)</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>DMA Subsystem</strong></td>
+                                        <td><code>axi_dma:7.1</code> Direct Register Mode (0x41E00000 - 0x41E0FFFF)</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>PL Arithmetic Pipeline</strong></td>
+                                        <td>Forward Cooley-Tukey NTT &rarr; Pointwise Multiply ($s=3$) &rarr; Inverse Gentleman-Sande iNTT</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 5. Security Testing Section -->
+                <section class="view-section" id="view-security">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <span class="panel-title">&#9876; Quantum Threat Demonstrator: Classical Factoring vs. Lattice Security</span>
+                        </div>
+                        <div class="panel-body">
+                            <h4 style="font-size: 13px; margin-bottom: 12px;">Toy RSA Factoring Benchmark (Pollard's Rho)</h4>
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Modulus</th>
+                                        <th>Composite $N$</th>
+                                        <th>Recovered Factor</th>
+                                        <th>Complexity Steps</th>
+                                        <th>Execution Latency</th>
+                                        <th>Security Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="rsa-benchmark-tbody">
+                                    <!-- Rendered by JS -->
+                                </tbody>
+                            </table>
+
+                            <h4 style="font-size: 13px; margin-top: 24px; margin-bottom: 12px;">Shor's Algorithm Period-Finding Simulator ($N=15, a=7$)</h4>
+                            <div id="shor-result-box" style="background: var(--color-surf2); padding: 16px; border-radius: var(--radius-sm); border: 1px solid var(--color-border);">
+                                <!-- Rendered by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 6. Event Logs Section -->
+                <section class="view-section" id="view-logs">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <span class="panel-title">&#9776; Real-Time Forensic Security Ledger</span>
+                        </div>
+                        <div class="panel-body">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>Event Type</th>
+                                        <th>Subsystem</th>
+                                        <th>Details</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="event-logs-tbody">
+                                    <!-- Rendered by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <script src="/static/js/cyfocus.js"></script>
+</body>
+</html>
