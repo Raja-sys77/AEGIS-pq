@@ -1,0 +1,42 @@
+# Git ignore for AEGIS-PQ
+
+# Virtual environments & Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+.env.*
+venv/
+.venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Operating system & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Large media files
+*.mp4
+*.avi
+*.mov
+*.mkv
+video/
+*.wmv
+
+# Agent runtime scratch & persistent internals
+.agents/
+scratch/
+*_board.py
+board_README.md
+
+# Sensitive credentials & private keys
+*.pem
+*.key
+*.id_rsa
+*id_rsa*
+*.pfx
+secrets/

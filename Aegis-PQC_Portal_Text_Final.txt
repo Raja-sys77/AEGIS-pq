@@ -1,0 +1,33 @@
+OPTION A (recommended): PROJECT OVERVIEW with October 2026 context  (limit 300 words; this text: 289 words)
+
+Problem. Industrial, utility and aerospace edge nodes stay in service for 15 to 25 years, so the keys they exchange today must resist future quantum computers. The gap is already visible: in October 2026 Kaspersky reported Lazarus-linked malware using ML-KEM-1024, while a GAO audit found none of 24 major US agencies had tested post-quantum cryptography. NIST standardized lattice-based ML-KEM (FIPS 203) and, in 2025, selected the code-based HQC as a backup because its hardness is independent of lattices; the HQC standard is not yet final. Edge devices therefore need algorithm agility, yet HQC in software on an embedded RISC-V core is estimated at tens of milliseconds, and one FPGA accelerator per algorithm adds significant fabric area.
+
+Solution. Aegis-PQC is a hardware-software co-designed, crypto-agile security subsystem on the PolarFire SoC Discovery Kit (MPFS095T). In fabric, a dual-KEM co-processor implements ML-KEM-768 and HQC-1 (pinned to the 2025-08-22 specification) over one shared Keccak sponge core and a banked LSRAM vector memory, with a ciphertext-bound hybrid key combiner; decapsulation keys stay in a fabric key memory with no bus read path. The E51 monitor core, isolated by Physical Memory Protection, verifies ML-DSA-65 signed policy advisories in software, keeps anti-rollback counters in sNVM and switches the fabric between ML-KEM, HQC and hybrid modes. The U54 cores run Linux, a handshake daemon and sensor telemetry, using the SoC's native crypto services for AES-256-GCM and entropy.
+
+Target application and outcome. An industrial telemetry node that rekeys with a PC gateway and reports sensor and power data. Expected outcomes: all known-answer tests passing in hardware; interoperable hybrid handshakes; a measured HQC speedup over the U54 software baseline (estimated 80x to 120x); fabric use below 55% of logic elements at 100 MHz; and authenticated algorithm failover without reflashing.
+
+------------------------------------------------
+
+OPTION B (evergreen fallback, no news hook): PROJECT OVERVIEW  (limit 300 words; this text: 263 words)
+
+Problem. Industrial, utility and aerospace edge nodes stay in service for 15 to 25 years, so the keys they exchange today must resist future quantum computers. NIST standardized lattice-based ML-KEM (FIPS 203) for key establishment and, in 2025, selected the code-based HQC as a backup because its hardness is independent of lattices. Running both in software on an embedded RISC-V core takes tens of milliseconds per HQC operation, and a separate FPGA accelerator for every algorithm adds significant fabric area.
+
+Solution. Aegis-PQC is a hardware-software co-designed, crypto-agile security subsystem on the PolarFire SoC Discovery Kit (MPFS095T). In fabric, a dual-KEM co-processor implements ML-KEM-768 and HQC-1 (pinned to the 2025-08-22 specification) over one shared Keccak sponge core and a banked LSRAM vector memory, with a ciphertext-bound hybrid key combiner. Decapsulation keys live in a fabric key memory with no bus read path. In the RISC-V subsystem, the E51 monitor core, isolated by Physical Memory Protection, verifies ML-DSA-65 signed policy advisories in software, keeps anti-rollback counters in sNVM and switches the fabric between ML-KEM, HQC and hybrid modes. The U54 cores run Linux, a handshake daemon and sensor telemetry, using the SoC's native crypto services for AES-256-GCM and entropy.
+
+Target application and outcome. An industrial telemetry node that rekeys with a PC gateway while reporting BME280 sensor and INA219 power data. Expected outcomes: all known-answer tests passing in hardware; interoperable hybrid handshakes with a PC peer; a measured HQC speedup over the U54 software baseline (estimated 80x to 120x); fabric use below 55% of logic elements at 100 MHz; and authenticated algorithm failover without reflashing.
+
+------------------------------------------------
+
+INNOVATION & EXPECTED IMPACT  (limit 250 words; this text: 227 words)
+
+Novelty. The commercial PQC IP for PolarFire that we found covers lattice and hash-based algorithms, and published HQC hardware targets other FPGA families. We found no HQC implementation for PolarFire and no design combining lattice and code-based KEMs. Aegis-PQC contributes this integration:
+1. Cross-family resource sharing: ML-KEM-768 (modular arithmetic on DSP math blocks) and HQC-1 (binary sparse multiplication and Reed-Muller/Reed-Solomon decoding in LUTs) share one Keccak core and one banked LSRAM subsystem, roughly halving hashing logic compared with two cores.
+2. Dual-KEM hybrid key exchange: the session key depends on both KEMs and a device secret, so it holds if either lattice or code-based hardness holds.
+3. Authenticated crypto-agility: ML-DSA-65 signed advisories with anti-rollback counters switch algorithms at run time, targeting under 100 ms, with no bitstream update.
+4. Key containment: decapsulation keys sit in fabric memory without a bus read port, and Physical Memory Protection keeps Linux away from key-control registers.
+
+Impact. Long-lived industrial and energy systems must migrate before RSA and elliptic curves fail, yet the HQC standard will not be final until 2027. An updatable fabric can host and replace algorithms in the field. The project delivers a reusable SmartDesign subsystem, measured area, latency and energy data for an HQC backup path, and a verified reference design for engineers on PolarFire SoC. Larger parameter sets and ML-DSA acceleration map naturally to the Icicle Kit.
+
+------------------------------------------------
+
+DEVELOPMENT PLATFORM: PolarFire SoC Discovery Kit (Track 1)
