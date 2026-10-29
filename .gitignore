@@ -19,13 +19,14 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Large media files
+# Large media & presentation files
 *.mp4
 *.avi
 *.mov
 *.mkv
 video/
 *.wmv
+*.pdf
 
 # Agent runtime scratch & persistent internals
 .agents/
