@@ -1,22 +1,21 @@
 /**
- * AEGIS-PQ CY · FOCUS Frontend Operations Logic
- * Connects with backend APIs at 192.168.0.5:8000
+ * AEGIS-PQ CY · FOCUS Operations UI Logic
+ * Handles real Mode A vs Mode B network socket transfers,
+ * hardware status querying, and adversarial test executions.
  */
 
 document.addEventListener("DOMContentLoaded", () => {
     initNavigation();
     initMobileNav();
     loadSystemInfo();
-    loadCryptoOperations();
-    loadBenchmarks();
-    loadSessions();
+    loadFpgaStatus();
+    loadTransferResults();
     loadSecurityTesting();
     loadEventLogs();
-    loadImageGrid();
     
-    // Auto-refresh telemetry every 5 seconds
+    // Auto-refresh event logs & results every 5 seconds
     setInterval(() => {
-        loadSessions();
+        loadTransferResults();
         loadEventLogs();
     }, 5000);
 });
@@ -40,16 +39,19 @@ function initNavigation() {
                 activeSec.classList.add("active");
             }
             
-            // Update breadcrumb
             const currentBreadcrumb = document.getElementById("breadcrumb-current");
             if (currentBreadcrumb) {
-                currentBreadcrumb.textContent = item.querySelector("span").textContent;
+                currentBreadcrumb.textContent = item.querySelector("span:last-child").textContent;
             }
             
-            // Close mobile drawer if open
             document.querySelector(".sidebar").classList.remove("open");
         });
     });
+}
+
+function switchToTransferLab() {
+    const labItem = document.querySelector(".nav-item[data-target='view-transfer-lab']");
+    if (labItem) labItem.click();
 }
 
 function initMobileNav() {
@@ -67,79 +69,133 @@ async function loadSystemInfo() {
         const res = await fetch("/api/system/info");
         const data = await res.json();
         
-        const socEl = document.getElementById("stat-soc");
-        if (socEl) socEl.textContent = data.target_hardware.soc || "Zynq-7000 XC7Z020";
-        
-        const hostEl = document.getElementById("stat-host");
-        if (hostEl) hostEl.textContent = `${data.host_system.ip}:${data.host_system.port}`;
-        
-        const diskEl = document.getElementById("stat-disk");
-        if (diskEl) diskEl.textContent = `${data.storage_budget.root_filesystem_free} Free (Safe)`;
-        
-        const targetOnline = data.target_hardware.online;
+        const pynqOnline = data.target_hardware && data.target_hardware.online;
         const pynqPill = document.getElementById("pynq-status-pill");
         if (pynqPill) {
-            pynqPill.innerHTML = `<span class="status-dot" style="background-color: ${targetOnline ? 'var(--color-success)' : 'var(--color-warning)'}"></span> PYNQ: ${targetOnline ? 'ONLINE' : 'STANDBY'}`;
+            pynqPill.innerHTML = `<span class="status-dot" style="background-color: ${pynqOnline ? 'var(--color-success)' : 'var(--color-warning)'}"></span> PYNQ: ${pynqOnline ? 'ONLINE' : 'STANDBY'}`;
         }
     } catch (err) {
         console.error("Failed to load system info:", err);
     }
 }
 
-async function loadCryptoOperations() {
+async function loadFpgaStatus() {
     try {
-        const res = await fetch("/api/crypto/operations");
+        const res = await fetch("/api/hardware/fpga");
         const data = await res.json();
-        
-        const kemEl = document.getElementById("info-kem");
-        if (kemEl) kemEl.textContent = data.standard;
-        
-        const ringEl = document.getElementById("info-ring");
-        if (ringEl) ringEl.textContent = data.ring;
-        
-        const kdfEl = document.getElementById("info-kdf");
-        if (kdfEl) kdfEl.textContent = data.kdf;
-        
-        const aeadEl = document.getElementById("info-aead");
-        if (aeadEl) aeadEl.textContent = data.aead;
+        const pill = document.getElementById("fpga-provenance-pill");
+        if (pill) {
+            pill.textContent = data.provenance;
+            pill.className = `kpi-pill ${data.online ? 'positive' : 'warning'}`;
+        }
     } catch (err) {
-        console.error("Failed to load crypto ops:", err);
+        console.error("Failed to load FPGA status:", err);
     }
 }
 
-async function loadBenchmarks() {
+async function handleTransferSubmit(event) {
+    event.preventDefault();
+    const btn = document.getElementById("btn-submit-transfer");
+    const spinner = document.getElementById("transfer-spinner");
+    const card = document.getElementById("transfer-live-card");
+    const content = document.getElementById("transfer-receipt-content");
+    
+    const mode = document.querySelector("input[name='transfer_mode']:checked").value;
+    const payload = document.getElementById("transfer-payload").value;
+    
+    btn.disabled = true;
+    spinner.style.display = "inline";
+    card.style.display = "none";
+    
     try {
-        const res = await fetch("/api/telemetry/benchmarks");
+        const res = await fetch("/api/transfers/execute", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                mode: mode,
+                message: payload
+            })
+        });
         const data = await res.json();
         
-        const speedupEl = document.getElementById("kpi-speedup");
-        if (speedupEl) speedupEl.textContent = `${data.speedup_ratio}x`;
+        card.style.display = "block";
+        if (data.success) {
+            let timingDetail = "";
+            if (data.timings_breakdown_ms) {
+                timingDetail = `
+                    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--color-border);">
+                        <strong>PQC Timing Breakdown:</strong><br>
+                        - ML-KEM-512 KeyGen: ${data.timings_breakdown_ms.mlkem_keygen} ms<br>
+                        - ML-KEM-512 Encapsulation: ${data.timings_breakdown_ms.mlkem_encaps} ms<br>
+                        - ML-KEM-512 Decapsulation: ${data.timings_breakdown_ms.mlkem_decaps} ms<br>
+                        - AES-256-GCM Encryption: ${data.timings_breakdown_ms.aes_gcm_encrypt} ms<br>
+                        - Total Socket Wire Roundtrip: ${data.timings_breakdown_ms.total_network_e2e} ms
+                    </div>
+                `;
+            }
+            
+            content.innerHTML = `
+                <div style="color: var(--color-success); font-weight: bold; margin-bottom: 6px;">
+                    &#10003; Transfer Verified Successfully [${data.provenance}]
+                </div>
+                <div>Transfer ID: <strong>${data.transfer_id}</strong> | Mode: <strong>${data.mode}</strong></div>
+                <div>Payload Transferred: <strong>${data.bytes_transferred} bytes</strong> | Latency: <strong>${data.latency_ms} ms</strong></div>
+                <div>SHA-256 Digest: <code>${data.sha256}</code></div>
+                <div>Security Assurance: <em>${data.security_level}</em></div>
+                <div>Receiver Status: <strong>${data.receiver_ack ? data.receiver_ack.status : 'ACK'}</strong></div>
+                ${timingDetail}
+            `;
+        } else {
+            content.innerHTML = `
+                <div style="color: var(--color-error); font-weight: bold;">
+                    &#9888; Transfer Failed: ${data.error || 'Unknown network error'}
+                </div>
+            `;
+        }
         
-        const hwTimeEl = document.getElementById("kpi-hw-time");
-        if (hwTimeEl) hwTimeEl.textContent = `${data.fpga_pl_transform_ms} ms`;
-        
-        const swTimeEl = document.getElementById("kpi-sw-time");
-        if (swTimeEl) swTimeEl.textContent = `${data.pure_python_arm_ms} ms`;
+        loadTransferResults();
+        loadEventLogs();
     } catch (err) {
-        console.error("Failed to load benchmarks:", err);
+        card.style.display = "block";
+        content.innerHTML = `<div style="color: var(--color-error);">Network Exception: ${err}</div>`;
+    } finally {
+        btn.disabled = false;
+        spinner.style.display = "none";
     }
 }
 
-async function loadSessions() {
+async function loadTransferResults() {
     try {
-        const res = await fetch("/api/network/sessions");
+        const res = await fetch("/api/transfers/results");
         const data = await res.json();
-        
-        const securedEl = document.getElementById("kpi-secured");
-        if (securedEl) securedEl.textContent = data.packets_secured;
-        
-        const droppedEl = document.getElementById("kpi-dropped");
-        if (droppedEl) droppedEl.textContent = data.packets_dropped;
-        
-        const sessionMeta = document.getElementById("session-meta-id");
-        if (sessionMeta) sessionMeta.textContent = data.current_session_id;
+        const tbody = document.getElementById("transfer-results-tbody");
+        if (tbody) {
+            if (data.results.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--color-muted);">No transfers recorded yet. Transmit a payload in the Transfer Lab.</td></tr>`;
+                return;
+            }
+            
+            tbody.innerHTML = data.results.map(r => {
+                const isSecure = r.mode === "AEGIS_PQ_SECURE";
+                const badge = r.authenticated ? 
+                    `<span class="badge-tag pass">AUTHENTICATED</span>` : 
+                    `<span class="badge-tag drop">UNPROTECTED</span>`;
+                
+                return `
+                    <tr>
+                        <td><strong>${r.transfer_id}</strong></td>
+                        <td><code>${r.mode}</code></td>
+                        <td>${r.bytes_transferred || r.original_bytes || 0} B</td>
+                        <td><code style="font-size: 10px;">${(r.sha256 || '').substring(0, 16)}...</code></td>
+                        <td><strong>${r.latency_ms} ms</strong></td>
+                        <td>${badge}</td>
+                        <td style="font-size: 11px;">${r.security_level || 'N/A'}</td>
+                    </tr>
+                `;
+            }).join("");
+        }
     } catch (err) {
-        console.error("Failed to load sessions:", err);
+        console.error("Failed to load transfer results:", err);
     }
 }
 
@@ -149,7 +205,7 @@ async function loadSecurityTesting() {
         const data = await res.json();
         
         const rsaTbody = document.getElementById("rsa-benchmark-tbody");
-        if (rsaTbody) {
+        if (rsaTbody && data.toy_rsa_benchmarks) {
             rsaTbody.innerHTML = data.toy_rsa_benchmarks.map(b => `
                 <tr>
                     <td><strong>${b.name}</strong> (${b.bits}-bit)</td>
@@ -171,6 +227,7 @@ async function loadSecurityTesting() {
                     <p>Simulated Period $r$: <strong>${s.period_r}</strong> (${s.quantum_speedup_class})</p>
                     <p>Recovered Non-Trivial Factors: <span style="color: var(--color-accent); font-weight: bold;">[${s.factors_recovered.join(", ")}]</span></p>
                     <p>Verdict: <span class="badge-tag drop">${s.security_verdict}</span></p>
+                    <p style="font-size: 10px; color: var(--color-muted); margin-top: 6px;">* Simulated demonstration only</p>
                 </div>
             `;
         }
@@ -183,13 +240,12 @@ async function loadEventLogs() {
     try {
         const res = await fetch("/api/events/logs");
         const logs = await res.json();
-        
         const tbody = document.getElementById("event-logs-tbody");
         if (tbody) {
             tbody.innerHTML = logs.map(l => {
                 let badgeClass = "info";
                 if (l.status === "PASS" || l.status === "VERIFIED") badgeClass = "pass";
-                if (l.status === "DROPPED" || l.severity === "CRITICAL") badgeClass = "drop";
+                if (l.status === "DROPPED" || l.status === "FAILED") badgeClass = "drop";
                 
                 return `
                     <tr>
@@ -197,6 +253,7 @@ async function loadEventLogs() {
                         <td><strong>${l.type}</strong></td>
                         <td><code>${l.component}</code></td>
                         <td>${l.details}</td>
+                        <td><span style="font-size: 10px; color: var(--color-muted);">${l.provenance || 'LIVE'}</span></td>
                         <td><span class="badge-tag ${badgeClass}">${l.status}</span></td>
                     </tr>
                 `;
@@ -207,47 +264,6 @@ async function loadEventLogs() {
     }
 }
 
-async function loadImageGrid() {
-    try {
-        const res = await fetch("/api/telemetry/image-grid");
-        const data = await res.json();
-        
-        const grid = document.getElementById("tile-grid-container");
-        if (grid) {
-            grid.innerHTML = data.tiles.map(t => `
-                <div class="tile-block authenticated" title="Tile #${t.tile_id} - Latency: ${t.latency_ms}ms, Entropy: ${t.entropy}">
-                    ${t.tile_id.toString().padStart(2, '0')}
-                </div>
-            `).join("");
-        }
-    } catch (err) {
-        console.error("Failed to load image grid:", err);
-    }
-}
-
-// Trigger Interactive Cryptographic Transaction
-async function triggerCryptoTransaction() {
-    const btn = document.getElementById("btn-run-pqc");
-    if (btn) btn.disabled = true;
-    
-    try {
-        const res = await fetch("/api/crypto/execute-op", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({message: "AEGIS-PQ High-Assurance Medical Scan Telemetry"})
-        });
-        const data = await res.json();
-        alert(`PQC Transaction Completed!\nKeyGen: ${data.timings_ms.keygen} ms\nEncaps: ${data.timings_ms.encaps} ms\nDecaps: ${data.timings_ms.decaps} ms\nCiphertext Entropy: ${data.entropy} bits/B`);
-        loadSessions();
-        loadEventLogs();
-    } catch (err) {
-        alert("Transaction failed: " + err);
-    } finally {
-        if (btn) btn.disabled = false;
-    }
-}
-
-// Trigger Active Adversarial Test
 async function triggerAdversarialAttack(attackType) {
     try {
         const res = await fetch("/api/security/execute", {
@@ -256,8 +272,7 @@ async function triggerAdversarialAttack(attackType) {
             body: JSON.stringify({attack_type: attackType})
         });
         const data = await res.json();
-        alert(`Adversarial Injection Result: ${data.outcome}\nDefense: ${data.defense || 'N/A'}`);
-        loadSessions();
+        alert(`Adversarial Injection Result: ${data.outcome}\nDefense: ${data.defense || 'N/A'}\nProvenance: ${data.provenance || 'LIVE'}`);
         loadEventLogs();
     } catch (err) {
         alert("Attack injection failed: " + err);

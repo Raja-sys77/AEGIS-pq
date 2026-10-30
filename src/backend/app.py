@@ -3,17 +3,11 @@ AEGIS-PQ Full-Stack Backend API Server
 Implements authentic REST and streaming telemetry endpoints for the
 CY · FOCUS Cybersecurity Operations Platform.
 
-Endpoints:
-1. GET  /api/system/info
-2. GET  /api/crypto/operations
-3. GET  /api/hardware/fpga
-4. GET  /api/network/sessions
-5. GET  /api/telemetry/benchmarks
-6. GET  /api/security/testing
-7. POST /api/security/execute
-8. GET  /api/events/logs
-9. POST /api/crypto/execute-op
-10. GET /api/telemetry/image-grid
+Exposes:
+1. Transfer Lab & Comparative Benchmarks (Mode A Legacy vs Mode B AEGIS-PQ)
+2. Real-Time Hardware & FPGA State
+3. Quantum Threat & Adversarial Test Harness
+4. Verifiable Event Log
 """
 
 import sys
@@ -23,16 +17,19 @@ import json
 import base64
 import threading
 from typing import Dict, Any, List
-from flask import Flask, jsonify, request, send_from_directory, render_template
+from flask import Flask, jsonify, request, render_template
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
+from src.backend.legacy_receiver import LegacyReceiverServer
+from src.backend.secure_receiver import SecureReceiverServer
+from src.backend.transfer_client import TransferClient
+from src.pynq.pynq_client import PYNQHardwareClient
+from src.redteam.redteam_suite import run_rsa_benchmark, shor_period_finder, calculate_shannon_entropy
 from src.crypto.mlkem512 import MLKEM512
 from src.crypto.hkdf_kdf import derive_session_keys
 from src.crypto.aead_cipher import AEGISAEADCipher
-from src.pynq.pynq_client import PYNQHardwareClient, software_hw_twin_transform
-from src.redteam.redteam_suite import run_rsa_benchmark, shor_period_finder, calculate_shannon_entropy
-from src.common.protocol import APBPFrame, MsgType, build_deterministic_nonce
+from src.common.protocol import build_deterministic_nonce
 
 app = Flask(
     __name__,
@@ -40,147 +37,133 @@ app = Flask(
     template_folder="../frontend/templates"
 )
 
-# Global State & Telemetry Store
+# Start Background Receiver Services on Host
+legacy_receiver = LegacyReceiverServer(host="0.0.0.0", port=5558)
+legacy_receiver.start()
+
+secure_receiver = SecureReceiverServer(host="0.0.0.0", port=5556)
+secure_receiver.start()
+
+transfer_client = TransferClient(
+    legacy_host="127.0.0.1",
+    legacy_port=5558,
+    secure_host="127.0.0.1",
+    secure_port=5556
+)
+
 pynq_client = PYNQHardwareClient(host="192.168.0.2")
 
 state_lock = threading.Lock()
+transfer_results: List[Dict[str, Any]] = []
+
 event_logs: List[Dict[str, Any]] = [
     {
         "id": "EVT-001",
-        "time": time.strftime("%H:%M:%S", time.localtime(time.time() - 120)),
-        "type": "SYSTEM_INIT",
-        "severity": "INFO",
-        "component": "AEGIS_CORE",
-        "details": "AEGIS-PQ Gateway Core initialized with NIST FIPS 203 + AES-256-GCM pipeline.",
-        "status": "PASS"
+        "time": time.strftime("%H:%M:%S", time.localtime(time.time() - 180)),
+        "type": "RECEIVER_INIT",
+        "component": "LEGACY_RECEIVER",
+        "details": "Mode A Direct Legacy Listener active on port 5558.",
+        "status": "PASS",
+        "provenance": "LIVE SOFTWARE"
     },
     {
         "id": "EVT-002",
-        "time": time.strftime("%H:%M:%S", time.localtime(time.time() - 60)),
-        "type": "HARDWARE_AUDIT",
-        "severity": "INFO",
-        "component": "PYNQ_Z2",
-        "details": "Target PYNQ-Z2 board online at 192.168.0.2 (Root free: 5.4MB, Zero-Install active).",
-        "status": "VERIFIED"
+        "time": time.strftime("%H:%M:%S", time.localtime(time.time() - 120)),
+        "type": "RECEIVER_INIT",
+        "component": "SECURE_RECEIVER",
+        "details": "Mode B AEGIS-PQ Post-Quantum Listener active on port 5556.",
+        "status": "PASS",
+        "provenance": "LIVE SOFTWARE"
     }
 ]
 
-sessions_state = {
-    "active_sessions": 1,
-    "current_session_id": "SES-KYBER512-001",
-    "protocol": "APBP-v1",
-    "cipher": "AES-256-GCM",
-    "kdf": "RFC 5869 HKDF-SHA256",
-    "kem": "ML-KEM-512 (FIPS 203)",
-    "packets_secured": 64,
-    "packets_dropped": 0,
-    "last_sequence": 64,
-    "replay_window_size": 1024,
-    "link_node1": "MOCK_CLIENT (Active)",
-    "link_node2": "PYNQ_GATEWAY (192.168.0.2)",
-    "link_node3": "RECEIVER_HOST (192.168.0.5:8000)"
-}
-
-# Image Grid Reassembly State (64 Tiles)
-image_grid_tiles = []
-for i in range(64):
-    image_grid_tiles.append({
-        "tile_id": i,
-        "row": i // 8,
-        "col": i % 8,
-        "status": "AUTHENTICATED",
-        "mac_valid": True,
-        "latency_ms": round(0.45 + (i % 7) * 0.08, 2),
-        "entropy": round(7.992 + (i % 5) * 0.001, 3)
-    })
-
-# --- Web UI Routes ---
+# --- UI Routes ---
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
-# --- API Endpoints ---
+# --- Transfer Lab Endpoints ---
+
+@app.route("/api/transfers/execute", methods=["POST"])
+def api_transfers_execute():
+    data = request.get_json() or {}
+    mode = data.get("mode", "AEGIS_PQ_SECURE")
+    message = data.get("message", "Confidential SCADA / Medical Telemetry Payload").encode("utf-8")
+    transfer_id = f"TX-{int(time.time() * 1000) % 100000:05d}"
+    
+    if mode == "LEGACY_DIRECT":
+        # Execute real network socket transfer through Mode A
+        res = transfer_client.send_legacy_direct(message, transfer_id=transfer_id)
+    else:
+        # Execute real network socket transfer through Mode B
+        session_id = f"SES-{transfer_id}"
+        res = transfer_client.send_aegis_pq_secure(
+            payload=message,
+            transfer_id=transfer_id,
+            session_id=session_id,
+            register_key_callback=secure_receiver.register_session
+        )
+        
+    with state_lock:
+        transfer_results.insert(0, res)
+        evt_id = f"EVT-{len(event_logs) + 1:03d}"
+        event_logs.insert(0, {
+            "id": evt_id,
+            "time": time.strftime("%H:%M:%S"),
+            "type": "PAYLOAD_TRANSFER",
+            "component": mode,
+            "details": f"Transferred {res.get('bytes_transferred', len(message))}B. Latency: {res.get('latency_ms')}ms. Auth: {res.get('authenticated')}.",
+            "status": "PASS" if res.get("success") else "FAILED",
+            "provenance": res.get("provenance", "LIVE SOFTWARE")
+        })
+        
+    return jsonify(res)
+
+
+@app.route("/api/transfers/results", methods=["GET"])
+def api_transfers_results():
+    with state_lock:
+        return jsonify({
+            "total_transfers": len(transfer_results),
+            "results": transfer_results[:50]
+        })
+
+
+# --- Hardware & System Diagnostics ---
+
+@app.route("/api/hardware/fpga", methods=["GET"])
+def api_hardware_fpga():
+    status = pynq_client.check_connection()
+    # Add explicit mathematical limitations discovered during audit
+    status["arithmetic_contract"] = "Scalar Multiplication by s=3 via NTT/PWM/iNTT (Not ML-KEM)"
+    status["provenance"] = "LIVE HARDWARE CHECK" if status["online"] else "NOT CONNECTED"
+    return jsonify(status)
+
 
 @app.route("/api/system/info", methods=["GET"])
 def api_system_info():
     pynq_status = pynq_client.check_connection()
-    info = {
-        "platform": "AEGIS-PQ Inline Cryptographic Offload Engine",
-        "version": "1.1.0",
-        "ui_paradigm": "CY · FOCUS Tactical Dark Cybersecurity Operations",
-        "host_system": {
-            "role": "Host Workstation & CY · FOCUS Dashboard Server",
-            "ip": "192.168.0.5",
-            "port": 8000,
-            "status": "ONLINE"
+    return jsonify({
+        "version": "1.2.0",
+        "host_ip": "192.168.0.5",
+        "listeners": {
+            "legacy_receiver_port": 5558,
+            "secure_receiver_port": 5556,
+            "web_dashboard_port": 8000,
+            "pynq_z2_board_ip": "192.168.0.2"
         },
         "target_hardware": pynq_status,
         "storage_budget": {
             "root_filesystem_free": "5.4 MB",
             "zero_install_mode": True,
-            "ram_buffering": "/dev/shm",
-            "flash_safe": True
-        },
-        "status": "HEALTHY"
-    }
-    return jsonify(info)
-
-
-@app.route("/api/crypto/operations", methods=["GET"])
-def api_crypto_operations():
-    ops = {
-        "standard": "NIST FIPS 203 (ML-KEM-512)",
-        "ring": "Z_3329[X]/(X^256 + 1)",
-        "rank_k": 2,
-        "noise_params": {"eta1": 3, "eta2": 2},
-        "public_key_bytes": 800,
-        "ciphertext_bytes": 768,
-        "secret_key_bytes": 1632,
-        "shared_secret_bytes": 32,
-        "kdf": "RFC 5869 HKDF-SHA256 (32B AES Key + 32B Aux Key)",
-        "aead": "NIST SP 800-38D AES-256-GCM (96-bit Nonce + 128-bit GHASH Tag)",
-        "pl_hardware_accelerator": {
-            "ip_core": "kyber_accelerator_top:1.0",
-            "clock_mhz": 50.0,
-            "dma": "axi_dma_0 (Direct Register Mode)",
-            "base_address": "0x40000000",
-            "dma_address": "0x41E00000"
+            "deployed_package": "/dev/shm/aegis_pynq_daemon.py (<4.0 KB)",
+            "resident_dashboard_status": "Preserved on Port 5000"
         }
-    }
-    return jsonify(ops)
+    })
 
 
-@app.route("/api/hardware/fpga", methods=["GET"])
-def api_hardware_fpga():
-    status = pynq_client.check_connection()
-    return jsonify(status)
-
-
-@app.route("/api/network/sessions", methods=["GET"])
-def api_network_sessions():
-    with state_lock:
-        return jsonify(sessions_state)
-
-
-@app.route("/api/telemetry/benchmarks", methods=["GET"])
-def api_telemetry_benchmarks():
-    benchmarks = {
-        "title": "Hardware PL vs ARM Cortex-A9 CPU Execution Latency",
-        "iterations": 1000,
-        "fpga_pl_transform_ms": 1.19,
-        "pure_python_arm_ms": 32.26,
-        "speedup_ratio": 27.11,
-        "clock_freq_mhz": 50.0,
-        "dma_transfer_bytes": 1024,
-        "end_to_end_frame_latency_ms": 1.84,
-        "baseline_comparison": [
-            {"engine": "ARM Cortex-A9 Pure-Python", "time_ms": 32.26, "speedup": "1.0x", "type": "Software"},
-            {"engine": "PYNQ-Z2 FPGA PL Accelerator", "time_ms": 1.19, "speedup": "27.1x", "type": "Hardware"}
-        ]
-    }
-    return jsonify(benchmarks)
-
+# --- Security Testing & Demonstrator ---
 
 @app.route("/api/security/testing", methods=["GET"])
 def api_security_testing():
@@ -189,10 +172,10 @@ def api_security_testing():
     return jsonify({
         "toy_rsa_benchmarks": rsa_res,
         "shor_quantum_simulator": shor_res,
-        "replay_protection": {
-            "window_size": 1024,
-            "status": "ACTIVE",
-            "replayed_packets_dropped": sessions_state["packets_dropped"]
+        "labels": {
+            "rsa_provenance": "DEMONSTRATION (Toy Key Factoring - Pollard's rho)",
+            "shor_provenance": "SIMULATION (Classical Period Finding)",
+            "caveat": "Toy demonstrations do not break production 2048/4096-bit RSA or ML-KEM"
         }
     })
 
@@ -207,61 +190,60 @@ def api_security_execute():
         cur_time = time.strftime("%H:%M:%S")
         
         if attack_type == "bit_flip":
-            # Real cryptographic test: encrypt payload, flip 1 bit in ciphertext, decrypt
+            # Real test: Mutate ciphertext bit in AES-256-GCM envelope
             key = os.urandom(32)
             cipher = AEGISAEADCipher(key)
-            nonce = build_deterministic_nonce(node_id=1, seq_num=sessions_state["last_sequence"] + 1)
-            ct = bytearray(cipher.encrypt(nonce, b"CRITICAL_HEALTH_DATA_PAYLOAD"))
-            ct[10] ^= 0x01  # Mutate ciphertext
+            nonce = build_deterministic_nonce(node_id=1, seq_num=999)
+            ct = bytearray(cipher.encrypt(nonce, b"CONFIDENTIAL_TELEMETRY"))
+            ct[10] ^= 0x01 # Mutate 1 bit
             
             try:
                 cipher.decrypt(nonce, bytes(ct))
                 result = {"outcome": "UNEXPECTED_PASS", "authenticated": True}
             except Exception as e:
-                sessions_state["packets_dropped"] += 1
                 result = {
                     "outcome": "TAMPER_DETECTED_AND_DROPPED",
                     "authenticated": False,
                     "error": "GHASH MAC Authentication Tag Mismatch",
-                    "defense": "NIST SP 800-38D Cryptographic Integrity Enforcement"
+                    "defense": "NIST SP 800-38D Cryptographic Integrity Enforcement",
+                    "provenance": "LIVE CRYPTOGRAPHIC EXECUTION"
                 }
                 event_logs.insert(0, {
                     "id": evt_id,
                     "time": cur_time,
                     "type": "ADVERSARIAL_BIT_FLIP",
-                    "severity": "CRITICAL",
                     "component": "AEAD_INGRESS",
                     "details": "Bit-flip tamper detected at byte 10. Frame dropped with 100% certainty.",
-                    "status": "DROPPED"
+                    "status": "DROPPED",
+                    "provenance": "LIVE CRYPTOGRAPHIC EXECUTION"
                 })
         elif attack_type == "replay":
-            # Real test: replay an already seen sequence number
+            # Real test: Replay sequence number
             key = os.urandom(32)
             cipher = AEGISAEADCipher(key)
             nonce = build_deterministic_nonce(node_id=1, seq_num=10)
-            ct = cipher.encrypt(nonce, b"REPLAY_TARGET_PAYLOAD")
-            cipher.decrypt(nonce, ct, seq_num=10) # First pass OK
+            ct = cipher.encrypt(nonce, b"REPLAY_TARGET")
+            cipher.decrypt(nonce, ct, seq_num=10) # Pass
             
-            # Second pass (replay)
             try:
                 cipher.decrypt(nonce, ct, seq_num=10)
                 result = {"outcome": "REPLAY_ACCEPTED", "replayed": True}
             except ValueError as e:
-                sessions_state["packets_dropped"] += 1
                 result = {
                     "outcome": "REPLAY_DETECTED_AND_DROPPED",
                     "replayed": False,
                     "error": str(e),
-                    "defense": "Sliding Window Replay Protection"
+                    "defense": "Sliding Window Replay Protection",
+                    "provenance": "LIVE CRYPTOGRAPHIC EXECUTION"
                 }
                 event_logs.insert(0, {
                     "id": evt_id,
                     "time": cur_time,
                     "type": "REPLAY_ATTACK",
-                    "severity": "HIGH",
                     "component": "REPLAY_FILTER",
                     "details": "Replayed sequence number 10 rejected by sliding window filter.",
-                    "status": "DROPPED"
+                    "status": "DROPPED",
+                    "provenance": "LIVE CRYPTOGRAPHIC EXECUTION"
                 })
         else:
             result = {"outcome": "UNKNOWN_ATTACK_TYPE"}
@@ -269,89 +251,11 @@ def api_security_execute():
     return jsonify(result)
 
 
-@app.route("/api/crypto/execute-op", methods=["POST"])
-def api_crypto_execute_op():
-    data = request.get_json() or {}
-    message = data.get("message", "AEGIS-PQ Confidential Payload").encode("utf-8")
-    
-    start_op = time.perf_counter()
-    # 1. Real ML-KEM-512 KeyGen
-    t_start = time.perf_counter()
-    ek, dk = MLKEM512.keygen()
-    t_keygen_ms = (time.perf_counter() - t_start) * 1000.0
-    
-    # 2. Real Encapsulation
-    t_start = time.perf_counter()
-    c, ss_enc = MLKEM512.encaps(ek)
-    t_encaps_ms = (time.perf_counter() - t_start) * 1000.0
-    
-    # 3. Real Decapsulation
-    t_start = time.perf_counter()
-    ss_dec = MLKEM512.decaps(c, dk)
-    t_decaps_ms = (time.perf_counter() - t_start) * 1000.0
-    
-    # 4. Real HKDF Key Derivation
-    aes_key, aux_key = derive_session_keys(ss_dec)
-    
-    # 5. Real AES-256-GCM Encryption
-    cipher = AEGISAEADCipher(aes_key)
-    with state_lock:
-        sessions_state["last_sequence"] += 1
-        seq = sessions_state["last_sequence"]
-        sessions_state["packets_secured"] += 1
-        
-    nonce = build_deterministic_nonce(node_id=2, seq_num=seq)
-    ciphertext = cipher.encrypt(nonce, message)
-    
-    # Calculate Shannon Entropy
-    entropy = calculate_shannon_entropy(ciphertext)
-    total_latency_ms = (time.perf_counter() - start_op) * 1000.0
-    
-    # Log event
-    with state_lock:
-        evt_id = f"EVT-{len(event_logs) + 1:03d}"
-        event_logs.insert(0, {
-            "id": evt_id,
-            "time": time.strftime("%H:%M:%S"),
-            "type": "PQC_TRANSACTION",
-            "severity": "INFO",
-            "component": "MLKEM512_AEAD",
-            "details": f"Secured {len(message)}B payload. KeyGen: {t_keygen_ms:.2f}ms, Encaps: {t_encaps_ms:.2f}ms. Entropy: {entropy:.3f}.",
-            "status": "PASS"
-        })
-        
-    return jsonify({
-        "success": True,
-        "message_length": len(message),
-        "ciphertext_hex": ciphertext.hex()[:64] + "...",
-        "nonce_hex": nonce.hex(),
-        "entropy": entropy,
-        "shared_secret_match": (ss_enc == ss_dec),
-        "timings_ms": {
-            "keygen": round(t_keygen_ms, 2),
-            "encaps": round(t_encaps_ms, 2),
-            "decaps": round(t_decaps_ms, 2),
-            "total_e2e": round(total_latency_ms, 2)
-        }
-    })
-
-
 @app.route("/api/events/logs", methods=["GET"])
 def api_events_logs():
     with state_lock:
         return jsonify(event_logs)
 
-
-@app.route("/api/telemetry/image-grid", methods=["GET"])
-def api_telemetry_image_grid():
-    with state_lock:
-        return jsonify({
-            "total_tiles": 64,
-            "tiles_authenticated": 64,
-            "scan_id": "DICOM-AXIAL-BRAIN-SCAN-04",
-            "tiles": image_grid_tiles
-        })
-
 if __name__ == "__main__":
-    print("[AEGIS-PQ] Starting Backend API Server on Port 8000...")
+    print("[AEGIS-PQ] Full-Stack Server starting on Port 8000...")
     app.run(host="0.0.0.0", port=8000, debug=False)

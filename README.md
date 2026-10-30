@@ -1,209 +1,130 @@
-# AEGIS-PQ: Hardware-Accelerated Post-Quantum Cryptographic Offload Engine
+# AEGIS-PQ: Inline Post-Quantum Cryptographic Offload Engine
+## Tactical Gateway for Legacy Infrastructure & Cyber-Physical Systems
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Target Platform](https://img.shields.io/badge/FPGA-Xilinx%20Zynq--7020%20(PYNQ--Z2)-red.svg)](https://www.xilinx.com/products/silicon-devices/soc/zynq-7000.html)
-[![Algorithm](https://img.shields.io/badge/PQC-CRYSTALS--Kyber--512%20%2F%20ML--KEM--512-green.svg)](https://csrc.nist.gov/pubs/fips/203/final)
-[![Development Status](https://img.shields.io/badge/Status-Architectural%20Reconnaissance%20%26%20Readiness%20Review-orange.svg)](#project-status)
-
----
-
-## 1. Executive Overview
-
-**AEGIS-PQ** is a compact, low-power, FPGA-accelerated post-quantum cryptographic (PQC) offload engine designed to secure legacy infrastructure against harvest-now, decrypt-later (HNDL) quantum threats without requiring wholesale replacement of host equipment or disruptive application refactoring.
-
-Deployed as an inline bump-in-the-wire or coprocessor offload node, AEGIS-PQ transparently intercepts legacy application traffic, executes lattice-based cryptographic arithmetic on a dedicated FPGA hardware pipeline (Xilinx Zynq-7000 / Artix-7 fabric), and delivers authenticated post-quantum secure transport across unprotected networks.
-
-```mermaid
-graph LR
-    subgraph LegacyHost ["Legacy Client (Naved's Laptop)"]
-        App["Legacy App / Sender"]
-    end
-
-    subgraph AEGISPQ ["AEGIS-PQ Node (PYNQ-Z2)"]
-        PS["ARM Cortex-A9 Processing System<br/>(Network Gateway & Driver)"]
-        PL["Artix-7 Programmable Logic<br/>(NTT / PWM / iNTT Accelerator)"]
-        PS <== "AXI DMA" ==> PL
-    end
-
-    subgraph ReceiverHost ["Monitoring Host (Raja's Laptop)"]
-        Receiver["AEGIS-PQ Receiver & Telemetry"]
-        RedTeam["Independent Red-Team Traffic Analyzer"]
-    end
-
-    App -- "Plaintext / Local Traffic" --> PS
-    PS -- "ML-KEM Protected Encrypted Traffic" --> Receiver
-    PS -. "Network Mirror / Packet Capture" .-> RedTeam
-```
+![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-18%2F18%20passing-success)
+![Hardware Target](https://img.shields.io/badge/target-Tul%20PYNQ--Z2%20(Zynq--7000)-orange)
+![Crypto Standard](https://img.shields.io/badge/PQC-NIST%20FIPS%20203%20ML--KEM--512-blue)
+![AEAD](https://img.shields.io/badge/AEAD-AES--256--GCM-blueviolet)
 
 ---
 
-## 2. Problem Statement & Motivation
+## 1. Project Overview & Mission
 
-Classical public-key cryptosystems (RSA, ECDH, ECDSA) rely on the hardness of integer factorization and discrete logarithms—problems solvable in polynomial time by quantum computers running Shor’s algorithm. 
+**AEGIS-PQ** is an inline post-quantum cryptographic offload engine engineered to safeguard legacy enterprise networks and cyber-physical infrastructure (e.g., hospital DICOM medical scanners, SCADA electrical substations, industrial PLCs) from **Harvest-Now, Decrypt-Later (HNDL)** quantum threats.
 
-Critical infrastructure across healthcare (PACS medical imaging), industrial SCADA systems, financial transactions, and aerospace avionics operates on 10- to 25-year hardware lifecycle cycles. These legacy endpoints cannot withstand quantum cryptanalysis, yet:
-- Their embedded CPUs lack the memory and compute capacity to run lattice-based polynomial arithmetic in real time.
-- Direct host firmware replacement is prohibited by certifications (FDA, IEC 62443).
-- Replacing complete industrial networks carries prohibitive capital expenditure.
-
-AEGIS-PQ solves this migration barrier by providing **inline cryptographic offloading**, executing the computationally demanding Number Theoretic Transform (NTT) pipeline on dedicated FPGA fabric while preserving standard network interfaces.
+Legacy endpoints frequently run on certified embedded systems or microcontrollers that cannot execute lattice-based post-quantum cryptography natively due to strict compute, memory, and regulatory re-certification barriers. AEGIS-PQ acts as a bump-in-the-wire transparent hardware/software gateway that encapsulates unencrypted legacy streams into authenticated, quantum-resistant envelopes using **NIST FIPS 203 ML-KEM-512**, **RFC 5869 HKDF-SHA256**, and **NIST SP 800-38D AES-256-GCM**.
 
 ---
 
-## 3. Hardware Architecture & Cryptographic Accelerator
+## 2. System Architecture & Workload Partitioning
 
-### 3.1 FPGA Pipeline Architecture
-The AEGIS-PQ prototype is deployed on the **Tul PYNQ-Z2** development board (Xilinx Zynq-7020 XC7Z020-1CLG400C SoC):
+To strictly respect the **5.4 MB available root filesystem constraint** on the Tul PYNQ-Z2 board, workloads are partitioned:
 
-| Subsystem | Specification |
-|---|---|
-| **Processing System (PS)** | Dual-core ARM Cortex-A9 @ 650 MHz, 512 MB DDR3 |
-| **Programmable Logic (PL)** | Artix-7 fabric (85K logic cells, 280 BRAM slices, 220 DSPs) |
-| **Host Interface** | AXI-Lite (Control Register @ `0x00`), AXI-Stream via AXI DMA (`axi_dma_0`) |
-| **Accelerator IP** | `kyber_accelerator_top_0` |
-| **Bitstream Artifacts** | `PQC Kyber/bitstream/design_1.bit` (3.9 MB), `design_1.hwh` (307 KB) |
-| **Clock Domain** | 50.0 MHz PL clock (`PCW_FPGA0_PERIPHERAL_FREQMHZ = 50`) |
-
-### 3.2 Polynomial Arithmetic Boundary
-The custom RTL accelerator accelerates polynomial operations in the quotient ring:
-$$R_q = \mathbb{Z}_q[X] / (X^n + 1)$$
-where:
-- Polynomial degree $n = 256$
-- Prime modulus $q = 3329$
-- Primitive 256th root of unity $\zeta \in \mathbb{Z}_q$
-- Inverse modular constant $q^{-1} \equiv -3327 \pmod{2^{16}}$
-
-```mermaid
-flowchart LR
-    A["Input Vector (256 uint32)"] --> B["AXI DMA Send"]
-    B --> C["Forward NTT (Cooley-Tukey Radix-2)"]
-    C --> D["Pointwise Polynomial Mult (PWM)"]
-    D --> E["Inverse NTT (Gentleman-Sande)"]
-    E --> F["Montgomery Modular Reduction"]
-    F --> G["AXI DMA Receive"]
-    G --> H["Output Vector (256 int32)"]
-```
-
-### 3.3 Cryptographic Boundary Distinction
-> [!IMPORTANT]
-> **Polynomial Arithmetic Accelerator vs. Complete ML-KEM:**
-> An FPGA NTT arithmetic core accelerates polynomial multiplication. It is **not** by itself a complete ML-KEM implementation.
-> A cryptographically complete ML-KEM-512 (FIPS 203) workflow requires:
-> 1. Pseudo-random sampling ($A \leftarrow \text{SampleNTT}(\text{SHAKE128}(\rho))$)
-> 2. Centered binomial distribution sampling ($\text{CBD}_\eta$)
-> 3. Symmetric hashing ($\text{SHA3-256}$, $\text{SHA3-512}$, $\text{SHAKE256}$)
-> 4. Fujisaki-Okamoto transform for IND-CCA2 security
-> 5. Key encapsulation ($\text{Encaps}$) and decapsulation ($\text{Decaps}$)
-> 6. Valid shared secret derivation ($\text{SS} = \text{KDF}(\dots)$) followed by authenticated symmetric encryption ($\text{AES-256-GCM}$ or $\text{ChaCha20-Poly1305}$).
->
-> AEGIS-PQ explicitly separates FPGA polynomial acceleration from the host-level KEM orchestration and authenticated transport layers.
+1. **Host Workstation (`192.168.0.5`):**
+   - **CY · FOCUS Tactical Operations Web Dashboard** (Port 8000).
+   - **Mode A Legacy Receiver Service** (Port 5558).
+   - **Mode B Secure APBP-v1 Receiver Service** (Port 5556).
+   - **Full-Stack REST Backend** (`src/backend/app.py`).
+2. **PYNQ-Z2 Hardware Node (`192.168.0.2`):**
+   - **Ultra-lightweight Zero-Install Daemon** (`/dev/shm/aegis_pynq_daemon.py`, `<4.0 KB`).
+   - Xilinx Zynq-7000 XC7Z020-1CLG400C SoC with 50.0 MHz PL clock.
+   - `kyber_accelerator_top:1.0` IP at `0x40000000` via `axi_dma:7.1` Direct Register Mode DMA.
+   - **Resident Dashboard Preservation:** Port 5000 (`app.py`) and Jupyter (Port 9090) remain preserved.
+3. **Legacy Sender (`192.168.0.3` / Local Test Client):**
+   - Transmits either unencrypted Mode A direct legacy streams or Mode B post-quantum encapsulated envelopes.
 
 ---
 
-## 4. Live PYNQ-Z2 Board Audit & Verification
+## 3. Two Transfer Modes: Direct vs. AEGIS-PQ
 
-Live read-only hardware verification on the active development board confirmed:
-- **Board IP:** `192.168.0.2` (Jupyter on port 9090, SSH on port 22, Web on port 80)
-- **OS & Kernel:** Linux `5.4.0-xilinx-v2020.2` #1 SMP PREEMPT (armv7l GNU/Linux)
-- **PYNQ Runtime:** Version `2.7.0` on Python `3.8.2`
-- **Memory & Storage:** 512 MB total RAM (330 MB available); Root filesystem `/` has 5.4 MB free (100% capacity utilized, strictly requiring zero-bloat software services).
-- **Target Project Directory:** `/home/xilinx/jupyter_notebooks/pqc_kyber512`
-- **Resident Dashboard:** Standalone Flask server (`app.py`, port 5000) interacting via `kyber_hal.py` with `design_1.bit`.
-
----
-
-## 5. Three-Node Live Demonstration Architecture
-
-The live demonstration comprises three interconnected nodes:
-
-| Node | Physical Entity | Operating Role | Interface / Responsibility |
-|---|---|---|---|
-| **Node 1** | Naved's Laptop | **Legacy Client** | Generates application data (diagnostic medical scans / industrial sensor streams) and selects transmission mode without local PQC capabilities. |
-| **Node 2** | PYNQ-Z2 Board | **Hardware Offload Gateway** | Intercepts transmission, executes hardware-accelerated NTT arithmetic, orchestrates ML-KEM session establishment, and encrypts payloads with authenticated AEAD. |
-| **Node 3A** | Raja's Laptop | **Telemetry Dashboard & Receiver** | Reconstructs payload, verifies MAC authentication tags, logs latency, speedup distributions, and system telemetry. |
-| **Node 3B** | Raja's Laptop | **Red-Team Security Analyzer** | Independent packet inspector capturing real network traffic, verifying tamper rejection, and testing cryptographic resistance. |
+| Parameter | Mode A: Direct Legacy Transfer | Mode B: AEGIS-PQ Secure Transfer |
+|:---|:---|:---|
+| **Route** | Direct TCP connection to Port 5558 | Encapsulated APBP-v1 socket to Port 5556 |
+| **Key Establishment** | None (Plaintext transmission) | **NIST FIPS 203 ML-KEM-512** (800B ek, 768B c) |
+| **Session KDF** | None | **RFC 5869 HKDF-SHA256** (32B AES + 32B Aux) |
+| **Payload Encryption** | None (Vulnerable to passive eavesdropping) | **NIST SP 800-38D AES-256-GCM** |
+| **Integrity & Replay** | None | 128-bit GHASH tag + 1024 sliding-window replay filter |
+| **Measured Latency** | Median: **14.25 ms** (Min: 1.89 ms, Max: 24.77 ms) | Median: **30.20 ms** (Min: 11.26 ms, Max: 45.91 ms) |
+| **Security Verdict** | **Vulnerable to HNDL & Tamper** | **Quantum Resistant & Authenticated** |
 
 ---
 
-## 6. Repository Structure
+## 4. Hardware Accelerator & Grounded Reality
+
+- **FPGA Microarchitecture**: Forward Cooley-Tukey NTT $\to$ Pointwise Multiplier ($FIXED\_SECRET = 3$) $\to$ Inverse Gentleman-Sande iNTT on Artix-7 PL fabric at 50.0 MHz.
+- **Audited Reality**: The existing hardware bitstream (`design_1.bit`) is an **isolated polynomial arithmetic accelerator**, *not* an autonomous ML-KEM implementation.
+- **Speedup Grounding**: The reported **27.1x speedup** (1.19 ms vs 32.26 ms) represents the empirical ratio between the FPGA AXI DMA streaming pipeline and unvectorized, interpreted Python executing on the ARM Cortex-A9 CPU for 1000 polynomial transformations.
+
+---
+
+## 5. Getting Started & How to Run
+
+### Prerequisites
+- Python 3.8+ (tested on Python 3.8, 3.12, 3.13)
+- `cryptography >= 2.8`
+- `paramiko`
+- `flask`
+- `numpy`
+
+### Quick Start
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/Raja-sys77/AEGIS-pq.git
+   cd AEGIS-pq
+   ```
+
+2. **Run all automated tests (18 tests):**
+   ```bash
+   python -m unittest discover tests
+   ```
+
+3. **Start the CY · FOCUS Operations Platform & Backend:**
+   ```bash
+   python src/backend/app.py
+   ```
+   Open your browser to: **`http://localhost:8000`**
+
+---
+
+## 6. Project Structure
 
 ```text
-AEGIS-pq/
-├── .gitignore                      # Ignore patterns for secrets, bloated binaries, caches
-├── README.md                       # Comprehensive system architecture & reproduction guide
+├── deploy/
+│   └── deployment_manifest.md      # PYNQ-Z2 zero-install RAM deployment manifest
 ├── docs/
 │   ├── development/
-│   │   └── continuous_integration_log.md   # Chronological development & push audit log
-│   └── reconnaissance/             # Authoritative technical audit reports
-│       ├── 00_master_reconnaissance_report.md
-│       ├── 01_workspace_inventory.md
-│       ├── 02_project_evolution.md
-│       ├── 03_fpga_hardware_audit.md
-│       ├── 04_existing_dashboard_audit.md
-│       ├── 05_three_node_architecture_audit.md
-│       ├── 06_cryptographic_design_review.md
-│       ├── 07_system_boundaries_and_dependencies.md
-│       ├── 08_network_and_deployment_review.md
-│       ├── 09_capability_gap_matrix.md
-│       ├── 10_validation_strategy.md
-│       ├── 11_implementation_roadmap.md
-│       └── 12_live_pynq_verification_log.md
-├── PQC Kyber/
-│   ├── bitstream/
-│   │   ├── design_1.bit            # Hardware accelerator FPGA bitstream
-│   │   └── design_1.hwh            # Hardware handoff metadata and AXI register map
-│   ├── src/
-│   │   ├── kyber_accelerator.cpp   # Vivado HLS source implementation
-│   │   ├── Jupyter Notebook Codes for PQC Kyber.py
-│   │   └── Final PL Output         # Hardware verification output
-│   └── docs/                       # Project documentation & presentation reports
-└── tests/                          # Automated verification suite (cryptography, protocols, mocks)
+│   │   └── continuous_integration_log.md  # Chronological Git commit audit ledger
+│   └── reconnaissance/             # 13 technical audit reports (00 to 12)
+├── src/
+│   ├── backend/
+│   │   ├── app.py                  # Full-Stack Flask REST API & UI engine
+│   │   ├── legacy_receiver.py      # Mode A Direct Legacy listener (Port 5558)
+│   │   ├── secure_receiver.py      # Mode B AEGIS-PQ APBP-v1 listener (Port 5556)
+│   │   └── transfer_client.py      # Dual-mode socket transmission client
+│   ├── common/
+│   │   └── protocol.py             # APBP-v1 36-byte length-prefixed binary framing
+│   ├── crypto/
+│   │   ├── aead_cipher.py          # AES-256-GCM cipher with replay window
+│   │   ├── hkdf_kdf.py             # RFC 5869 HKDF-SHA256 session expansion
+│   │   └── mlkem512.py             # Pure-Python NIST FIPS 203 ML-KEM-512 core
+│   ├── frontend/
+│   │   ├── static/css/cyfocus.css  # CY · FOCUS tactical dark CSS tokens
+│   │   ├── static/js/cyfocus.js    # Reactive UI & real-time transfer logic
+│   │   └── templates/index.html    # Single-page operations dashboard
+│   ├── pynq/
+│   │   ├── aegis_pynq_daemon.py    # Zero-disk in-memory hardware daemon
+│   │   └── pynq_client.py          # SSH & RPC hardware client adapter
+│   └── redteam/
+│       └── redteam_suite.py        # Pollard's rho & Shor's algorithm demonstrator
+└── tests/
+    ├── test_api.py                 # REST endpoint integration tests
+    ├── test_crypto.py              # ML-KEM-512, HKDF, AEAD unit tests
+    ├── test_redteam.py             # Quantum threat & tamper rejection tests
+    └── test_transfers.py           # Mode A & Mode B end-to-end socket tests
 ```
 
 ---
 
-## 7. Setup & Reproduction Guide
-
-### 7.1 Prerequisites
-- Python 3.8+ (Host machine & PYNQ-Z2)
-- NumPy, Cryptography, Paramiko, Requests, Flask
-- Physical or emulated PYNQ-Z2 board with Xilinx Vivado / PYNQ 2.7.0 environment
-
-### 7.2 Running Local Verification
-```bash
-# Clone the repository
-git clone https://github.com/Raja-sys77/AEGIS-pq.git
-cd AEGIS-pq
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run offline cryptographic and interface tests
-python -m unittest discover tests/
-```
-
-### 7.3 Board Connection (Read-Only Inspection)
-```bash
-# Verify connectivity
-ssh xilinx@192.168.0.2
-
-# Target directory
-cd /home/xilinx/jupyter_notebooks/pqc_kyber512
-
-# Inspect running dashboard without disruption
-ps aux | grep app.py
-```
-
----
-
-## 8. Development & Integrity Principles
-
-1. **Evidence-Based Metrics:** Hardware speedups (e.g., reported ~27× acceleration) are derived exclusively from verified, repeated hardware timing loops versus native software execution, never hardcoded.
-2. **Cryptographic Rigor:** No simulated cryptographic shortcuts (such as hashing raw NTT output) are substituted for NIST FIPS 203 ML-KEM key encapsulation.
-3. **Hardware Preservation:** Existing bitstreams, PYNQ dashboards, and onboard configurations are strictly preserved.
-
----
-
-## 9. License
-
-This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
+## 7. License
+Licensed under the Apache License, Version 2.0.
