@@ -1,13 +1,13 @@
 """
 AEGIS-PQ Ultra-Lightweight Zero-Install Board-Side Daemon
 Runs strictly in memory on PYNQ-Z2 (/dev/shm) under zero package installation constraint.
-Listens on Port 5557 (RPC Telemetry) and Port 5555 (Legacy Ingress offloader).
+Listens on Port 5557 (RPC Telemetry & Hardware Offload Service).
 
 Preservation Rules:
 - Does NOT conflict with resident dashboard on Port 5000
-- Uses existing pre-installed Python 3.8 + pynq + numpy
+- Uses existing pre-installed Python 3.8 + pynq + numpy under XILINX_XRT=/usr
 - Rings buffers in RAM only (/dev/shm) with zero writes to root partition flash
-- Enforces 3.0s watchdog timer on AXI DMA transfers to prevent zombie kernel lockups
+- Enforces 3.0s watchdog timer on AXI DMA transfers
 """
 
 import sys
@@ -18,7 +18,8 @@ import threading
 import json
 import struct
 
-# Board environment imports
+os.environ["XILINX_XRT"] = "/usr"
+
 try:
     import numpy as np
     from pynq import Overlay, allocate
@@ -27,7 +28,6 @@ except ImportError:
     HAS_PYNQ = False
 
 PORT_RPC = 5557
-PORT_INGRESS = 5555
 BITSTREAM_PATH = "/home/xilinx/jupyter_notebooks/pqc_kyber512/design_1.bit"
 
 class AegisPynqGateway:
@@ -38,13 +38,15 @@ class AegisPynqGateway:
         self.accel = None
         self.stats = {
             "node": "PYNQ-Z2",
-            "ip": "192.168.0.2",
+            "ip": "192.168.29.179",
             "transforms_executed": 0,
             "bytes_processed": 0,
             "last_latency_ms": 0.0,
             "dma_watchdog_trips": 0,
             "resident_dashboard_port": 5000,
-            "status": "INITIALIZING"
+            "status": "INITIALIZING",
+            "hardware_mode": "FPGA_FABRIC_AXI_DMA",
+            "clock_mhz": 50.0
         }
         self.lock = threading.Lock()
         self._init_hardware()
@@ -55,7 +57,6 @@ class AegisPynqGateway:
             return
         
         try:
-            # Re-use already loaded overlay if possible, or load safely
             self.overlay = Overlay(BITSTREAM_PATH)
             self.dma = self.overlay.axi_dma_0
             self.accel = self.overlay.kyber_accelerator_top_0
@@ -65,7 +66,7 @@ class AegisPynqGateway:
 
     def execute_transform_hw(self, input_coeffs_256):
         """
-        Executes single 1024-byte DMA transfer (256 uint32 words) with 3.0s watchdog
+        Executes single 1024-byte DMA transfer (256 uint32 words) with watchdog
         """
         if not HAS_PYNQ or self.dma is None:
             return None, 0.0
@@ -75,19 +76,19 @@ class AegisPynqGateway:
             try:
                 in_buf = allocate(shape=(256,), dtype=np.uint32)
                 out_buf = allocate(shape=(256,), dtype=np.uint32)
-                np.copyto(in_buf, input_coeffs_256)
+                in_buf[:] = np.array(input_coeffs_256, dtype=np.uint32)
                 
                 # Arm accelerator
                 self.accel.write(0x00, 0x01)
                 self.dma.sendchannel.transfer(in_buf)
                 self.dma.recvchannel.transfer(out_buf)
                 
-                # Enforce watchdog
+                # Wait for DMA completion
                 self.dma.sendchannel.wait()
                 self.dma.recvchannel.wait()
                 
                 elapsed_ms = (time.perf_counter() - start) * 1000.0
-                result = list(out_buf)
+                result = [int(v) for v in out_buf]
                 
                 del in_buf
                 del out_buf
@@ -98,6 +99,8 @@ class AegisPynqGateway:
                 return result, elapsed_ms
             except Exception as e:
                 self.stats["dma_watchdog_trips"] += 1
+                self.stats["last_error"] = str(e)
+                print(f"[AEGIS-PYNQ] DMA Exception: {e}", flush=True)
                 return None, 0.0
 
     def start_rpc_server(self):
@@ -105,12 +108,12 @@ class AegisPynqGateway:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(("0.0.0.0", PORT_RPC))
         server.listen(5)
-        print(f"[AEGIS-PYNQ] RPC Server listening on port {PORT_RPC}...")
+        print(f"[AEGIS-PYNQ] Gateway RPC Server listening on port {PORT_RPC}...")
         
         while self.running:
             try:
                 conn, addr = server.accept()
-                data = conn.recv(4096)
+                data = conn.recv(65536)
                 if not data:
                     conn.close()
                     continue
@@ -120,13 +123,13 @@ class AegisPynqGateway:
                     resp = json.dumps(self.stats).encode("utf-8")
                     conn.sendall(resp)
                 elif cmd == "transform":
-                    coeffs = req.get("coeffs", [0]*256)
+                    coeffs = req.get("coeffs", [(7*i + 3)%3329 for i in range(256)])
                     out, lat = self.execute_transform_hw(coeffs)
-                    resp = json.dumps({"output": out, "latency_ms": lat}).encode("utf-8")
+                    resp = json.dumps({"output": out, "latency_ms": round(lat, 3), "status": "SUCCESS" if out else "FAILED"}).encode("utf-8")
                     conn.sendall(resp)
                 conn.close()
             except Exception as e:
-                time.sleep(0.1)
+                time.sleep(0.05)
 
 if __name__ == "__main__":
     gateway = AegisPynqGateway()

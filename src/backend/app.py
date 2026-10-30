@@ -77,6 +77,17 @@ event_logs: List[Dict[str, Any]] = [
     }
 ]
 
+@app.route("/api/sessions/register", methods=["POST"])
+def api_sessions_register():
+    data = request.get_json() or {}
+    session_id = data.get("session_id")
+    aes_key_hex = data.get("aes_key_hex")
+    if session_id and aes_key_hex:
+        secure_receiver.register_session(session_id, bytes.fromhex(aes_key_hex))
+        return jsonify({"status": "REGISTERED", "session_id": session_id})
+    return jsonify({"error": "INVALID_SESSION_PARAMS"}), 400
+
+
 # --- UI Routes ---
 
 @app.route("/")
